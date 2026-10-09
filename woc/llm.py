@@ -1,0 +1,188 @@
+import json
+import re
+import urllib.error
+import urllib.request
+
+from .config import load_config
+from .prompts import SYSTEM_PROMPT
+
+_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+def clean_text(s: str) -> str:
+    if not s:
+        return s
+    s = _SURROGATE_RE.sub("\ufffd", s)
+    return s.encode("utf-8", "ignore").decode("utf-8", "ignore")
+
+
+class LLMError(Exception):
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
+
+
+# Streaming Filter
+class StreamMode:
+    UNDECIDED = 0
+    CHAT = 1
+    COMMAND = 2
+
+
+class StreamFilter:
+    CHAT_MARKER = "#CHAT:"
+
+    def __init__(self):
+        self.buf = ""
+        self.mode = StreamMode.UNDECIDED
+        self.acc = ""
+        self.emitted = ""
+
+    def feed(self, chunk):
+        if not chunk:
+            return ""
+        self.acc += chunk
+
+        if self.mode == StreamMode.UNDECIDED:
+            self.buf += chunk
+            stripped = self.buf.lstrip()
+
+            if stripped.startswith(self.CHAT_MARKER):
+                rest = stripped[len(self.CHAT_MARKER):]
+                self.mode = StreamMode.CHAT
+                self.emitted += rest
+                self.buf = ""
+                return rest
+
+            if len(stripped) < len(self.CHAT_MARKER) and self.CHAT_MARKER.startswith(stripped):
+                return ""
+
+            self.mode = StreamMode.COMMAND
+            out = self.buf
+            self.buf = ""
+            self.emitted += out
+            return out
+
+        self.emitted += chunk
+        return chunk
+
+    def finish(self):
+        if self.mode == StreamMode.UNDECIDED:
+            if self.buf.lstrip().startswith(self.CHAT_MARKER):
+                self.mode = StreamMode.CHAT
+                rest = self.buf.lstrip()[len(self.CHAT_MARKER):]
+                self.emitted += rest
+                self.buf = ""
+                return rest
+            self.mode = StreamMode.COMMAND
+            out = self.buf
+            self.buf = ""
+            self.emitted += out
+            return out
+        return ""
+
+
+# streaming call
+def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
+    if not cfg["api_key"]:
+        raise LLMError("未配置 API Key（WOC_API_KEY 或 ~/.config/woc/config.toml）")
+
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            m["content"] = clean_text(c)
+
+    url = cfg["api_base"].rstrip("/") + "/chat/completions"
+    payload = {
+        "model": cfg["model"],
+        "messages": messages,
+        "temperature": 0,
+        "max_tokens": 4096,
+        "stream": True,
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "Authorization": f"Bearer {cfg['api_key']}",
+        },
+        method="POST",
+    )
+
+    flt = StreamFilter()
+    reported_mode = None
+
+    def _emit(text):
+        if text and on_chunk:
+            on_chunk(text)
+
+    def _maybe_report_mode():
+        nonlocal reported_mode
+        if flt.mode != StreamMode.UNDECIDED and flt.mode != reported_mode:
+            reported_mode = flt.mode
+            if on_mode:
+                on_mode(flt.mode)
+
+    try:
+        resp = urllib.request.urlopen(req, timeout=cfg["timeout"])
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "ignore")
+        raise LLMError(f"HTTP {e.code}: {body}", code=e.code) from e
+    except Exception as e:
+        raise LLMError(f"请求失败: {e}") from e
+
+    try:
+        for raw_line in resp:
+            line = raw_line.decode("utf-8", "replace").rstrip("\r\n")
+            if not line:
+                continue
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                obj = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+
+            try:
+                delta = obj["choices"][0].get("delta") or {}
+            except (KeyError, IndexError, TypeError):
+                continue
+            piece = delta.get("content")
+            if not piece:
+                continue
+
+            out = flt.feed(piece)
+            _emit(out)
+            _maybe_report_mode()
+    except Exception as e:
+        raise LLMError(f"流式读取失败: {e}") from e
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+    tail = flt.finish()
+    _emit(tail)
+    _maybe_report_mode()
+
+    if not flt.acc.strip():
+        raise LLMError("LLM 未返回内容")
+
+    return flt.acc.strip()
+
+
+def call_llm_messages(messages, cfg, on_chunk=None, on_mode=None):
+    return call_llm_messages_stream(messages, cfg, on_chunk=on_chunk, on_mode=on_mode)
+
+
+def call_llm(user_input, cfg, on_chunk=None, on_mode=None):
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_input},
+    ]
+    return call_llm_messages(messages, cfg, on_chunk=on_chunk, on_mode=on_mode)
