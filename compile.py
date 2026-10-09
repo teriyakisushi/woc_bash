@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-compile.py - 一键把 woc.py 安装成终端可直接调用的 woc / wocc 命令。
+compile.py - 一键把 woc.py 安装成终端可直接调用的 woc / wocc / woc_chat 命令。
 
 用法:
     python3 compile.py                    # 交互式安装
@@ -23,9 +23,10 @@ import textwrap
 from pathlib import Path
 
 # ---------- 常量 ----------
-# 同一个源文件会以两个名字安装，程序内部用 basename 区分模式
-COMMANDS = ("woc", "wocc")
+# woc / wocc 共用主程序，woc_chat 是独立入口但复用同目录的 woc.py 模块
+COMMANDS = ("woc", "wocc", "woc_chat")
 DEFAULT_SRC = "woc.py"
+CHAT_SRC = "woc_chat.py"
 CONFIG_DIR = Path.home() / ".config" / "woc"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 
@@ -86,9 +87,25 @@ def install_binary(src: Path, prefix: Path) -> list[Path]:
     if not content.startswith("#!"):
         content = "#!/usr/bin/env python3\n" + content
 
+    chat_src = src.parent / CHAT_SRC
+    if not chat_src.is_file():
+        die(f"找不到聊天模式源文件: {chat_src}")
+
+    # woc_chat 复用 woc.py 中的 API 调用和配置逻辑。
+    module_dst = prefix / "woc.py"
+    module_dst.write_text(content, encoding="utf-8")
+    module_dst.chmod(module_dst.stat().st_mode | stat.S_IXUSR)
+
+    sources = {"woc": src, "wocc": src, "woc_chat": chat_src}
+    chat_module = prefix / CHAT_SRC
+    chat_module.write_text(chat_src.read_text(encoding="utf-8"), encoding="utf-8")
+    chat_module.chmod(chat_module.stat().st_mode | stat.S_IXUSR)
     for name in COMMANDS:
         dst = prefix / name
-        dst.write_text(content, encoding="utf-8")
+        installed_content = sources[name].read_text(encoding="utf-8")
+        if not installed_content.startswith("#!"):
+            installed_content = "#!/usr/bin/env python3\n" + installed_content
+        dst.write_text(installed_content, encoding="utf-8")
         mode = dst.stat().st_mode
         dst.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         log(f"已安装: {dst}")
@@ -286,6 +303,7 @@ def do_install(args) -> None:
     log(f"安装目录: {prefix}")
 
     check_syntax(src)
+    check_syntax(src.parent / CHAT_SRC)
     install_binary(src, prefix)
 
     # shell 配置：PATH
@@ -322,6 +340,15 @@ def do_uninstall(args) -> None:
         else:
             log(f"未找到: {bin_path}（跳过）")
 
+    module_path = prefix / "woc.py"
+    if module_path.exists():
+        module_path.unlink()
+        log(f"已删除: {module_path}")
+    chat_module = prefix / CHAT_SRC
+    if chat_module.exists():
+        chat_module.unlink()
+        log(f"已删除: {chat_module}")
+
     for rc in detect_rc_files():
         remove_block(rc)
 
@@ -341,7 +368,7 @@ def do_uninstall(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="compile.py",
-        description="把 woc.py 一键安装成终端命令 woc / wocc",
+        description="把 woc.py 一键安装成终端命令 woc / wocc / woc_chat",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
             示例:

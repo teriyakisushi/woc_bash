@@ -4,7 +4,7 @@ python -m nuitka \
     --standalone \
     --onefile \
     --assume-yes-for-downloads \
-    --output-filename=helpme \
+    --output-filename=woc \
     --lto=yes \
     --remove-output \
     woc.py

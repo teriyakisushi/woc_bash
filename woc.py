@@ -51,6 +51,17 @@ cerr = C(sys.stderr)
 cout = C(sys.stdout)
 
 
+def interactive_input(prompt, stream=sys.stderr):
+    """Read a line without letting readline count ANSI prompt bytes as columns."""
+    if _supports_color(stream):
+        # readline needs the visible prefix width for cursor redraw, while ANSI
+        # control sequences themselves must be marked as zero-width.
+        prompt = re.sub(r"(\033\[[0-9;]*m)", r"\001\1\002", prompt)
+    if not prompt.startswith("\n"):
+        prompt = "\n" + prompt
+    return input(prompt)
+
+
 def eprint(text="", *styles):
     """打印到 stderr，自动换行 + flush。"""
     sys.stderr.write(cerr(text, *styles) + "\n")
@@ -374,8 +385,10 @@ def sanitize(raw):
             raise ChatResponse(line[len(CHAT_MARKER):].strip())
         if line.startswith("#ERROR"):
             raise CommandGenError(line)
-        line = PROMPT_RE.sub("", line)
-        line = line.strip("`").strip().strip("'\"")
+        line = PROMPT_RE.sub("", line).strip()
+        # 不要删除命令两端的引号：它们可能是 shell 语法的一部分。
+        if len(line) >= 2 and line.startswith("`") and line.endswith("`"):
+            line = line[1:-1].strip()
         if not line:
             continue
         return line
@@ -461,6 +474,8 @@ def woc_main(argv):
             sys.stdout.write(text)
         sys.stdout.flush()
 
+    sys.stdout.write(cout("[assistant] ", C.GREEN, C.BOLD))
+    sys.stdout.flush()
     try:
         raw = call_llm(user_input, cfg, on_chunk=on_chunk, on_mode=on_mode)
     except LLMError as e:
@@ -472,7 +487,7 @@ def woc_main(argv):
         sys.stdout.flush()
         eprint("[woc] 按 Enter 执行，Ctrl+C 取消", C.GREEN)
     elif state["mode"] == StreamMode.CHAT:
-        sys.stdout.write("\n")
+        sys.stdout.write("\n\n")
         sys.stdout.flush()
 
     try:
@@ -521,12 +536,12 @@ def wocc_main(argv):
         if pending_input is not None:
             user_input = pending_input
             pending_input = None
-            eprint(f"> {user_input}", C.MAGENTA)
+            eprint(f"[user] {user_input}", C.MAGENTA, C.BOLD)
         else:
             try:
-                sys.stderr.write(cerr("> ", C.MAGENTA))
-                sys.stderr.flush()
-                user_input = input().strip()
+                user_input = interactive_input(
+                    cerr("[user] ", C.MAGENTA, C.BOLD)
+                ).strip()
             except (KeyboardInterrupt, EOFError):
                 eprint("\n[woc] 会话结束", C.GREEN)
                 break
@@ -551,6 +566,10 @@ def wocc_main(argv):
                 sys.stdout.write(text)
             sys.stdout.flush()
 
+        # input() 已在 stderr 上结束用户行；显式从新行开始，避免 stdout
+        # 缓冲或重定向时命令粘在用户输入后面。
+        sys.stdout.write("\n" + cout("[assistant] ", C.GREEN, C.BOLD))
+        sys.stdout.flush()
         try:
             raw = call_llm_messages(
                 messages, cfg, on_chunk=on_chunk, on_mode=on_mode
@@ -608,7 +627,8 @@ def wocc_main(argv):
             continue
 
         try:
-            ans = input()
+            ans = interactive_input(prompt="")
+
         except (KeyboardInterrupt, EOFError):
             eprint("\n[woc] 会话结束", C.GREEN)
             break
@@ -654,6 +674,10 @@ def main():
     if prog == "wocc":
         wocc_main(argv)
     else:
+        if argv and argv[0] in ("-c", "--chat"):
+            from woc_chat import woc_chat_main
+            woc_chat_main(argv[1:])
+            return
         woc_main(argv)
 
 
