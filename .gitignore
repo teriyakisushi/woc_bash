@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# build artifacts
+woc
+*.log
+
+# editors
+.vscode/
+.idea/
+*.swp
