@@ -29,7 +29,7 @@ def woc_chat_main(argv=None):
     pending = " ".join(argv) if argv else None
     colors = C(sys.stdout)
 
-    cerr(f"[woc_chat] 已进入聊天，当前目录: {cwd}", C.GREEN, C.BOLD)
+    cerr("[woc_chat] 已进入聊天模式", C.GREEN, C.BOLD)
     cerr("[woc_chat] 输入 :q 退出", C.GREEN)
     while True:
         if pending is not None:
