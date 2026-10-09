@@ -1,9 +1,14 @@
 import os
 import sys
 import codecs
+import shutil
 import termios
 import tty
 import unicodedata
+import re
+
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _supports_color(stream):
@@ -51,6 +56,10 @@ def _display_width(text):
     return width
 
 
+def _visible_width(text):
+    return _display_width(_ANSI_ESCAPE.sub("", text))
+
+
 def interactive_input(prompt, stream=sys.stderr):
     """Read a line while keeping the fixed prompt outside editable input."""
     if not prompt.startswith("\n"):
@@ -78,10 +87,20 @@ def interactive_input(prompt, stream=sys.stderr):
     cursor = 0
     escape = 0
     escape_buffer = bytearray()
+    columns = max(shutil.get_terminal_size((80, 24)).columns, 8)
 
     def redraw():
-        suffix_width = _display_width("".join(text[cursor:]))
-        stream.write("\r" + redraw_prompt + "".join(text) + "\x1b[K")
+        prompt_width = _visible_width(redraw_prompt)
+        available = max(columns - prompt_width - 1, 1)
+        start = cursor
+        while start > 0 and _display_width("".join(text[start - 1:cursor])) <= available:
+            start -= 1
+        end = cursor
+        while end < len(text) and _display_width("".join(text[start:end + 1])) <= available:
+            end += 1
+        visible = "".join(text[start:end])
+        suffix_width = _display_width("".join(text[cursor:end]))
+        stream.write("\r" + redraw_prompt + visible + "\x1b[K")
         if suffix_width:
             stream.write(f"\x1b[{suffix_width}D")
         stream.flush()
