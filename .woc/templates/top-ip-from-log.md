@@ -9,7 +9,7 @@ when: 用户问"访问量最高的 IP / 哪个 IP 请求最多 / 分析访问日
 
 分析 Web 访问日志（nginx/apache combined 格式），找出请求量最高的客户端。
 
-# 参考命令（已验证）
+# 参考命令（作者标注，未经验证）
 
 ```bash
 awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head -n 10

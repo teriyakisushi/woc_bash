@@ -299,7 +299,7 @@ def do_list_templates() -> None:
 
 def do_global_templates(ids: list) -> None:
     here, install_templates, _load, user_dir = _template_helpers()
-    copied, skipped, missing = install_templates(
+    copied, skipped, missing, failed = install_templates(
         ids or None, project_dir=here, dry_run=False
     )
     log(f"来源: {here / '.woc' / 'templates'}")
@@ -310,14 +310,18 @@ def do_global_templates(ids: list) -> None:
         log(f"=  已是最新 {tid}")
     for tid in missing:
         print(f"[compile] ❌ 找不到模板: {tid}", file=sys.stderr)
+    for tid, reason in failed:
+        print(f"[compile] ❌ 写入失败 {tid}: {reason}", file=sys.stderr)
     if not copied and not skipped:
-        log("没有可安装的模板")
-        if missing:
+        log("没有可安装的模板" if not failed else "全部写入失败")
+        if missing or failed:
             sys.exit(1)
         return
-    log(f"完成: 安装 {len(copied)} 个, 未变 {len(skipped)} 个")
+    log(f"完成: 安装 {len(copied)} 个, 未变 {len(skipped)} 个"
+        + (f", 失败 {len(failed)} 个" if failed else ""))
     log("这些模板现在在所有项目里都可用（用户级优先，会覆盖项目级同名 id）")
-    if missing:
+    log("注意: <templates> 段已变化，下一次请求的前缀缓存会重建一次")
+    if missing or failed:
         sys.exit(1)
 
 

@@ -72,7 +72,7 @@ def _cmd_lint_templates():
 
 
 def _cmd_install_templates(ids):
-    copied, skipped, missing = install_templates(ids or None)
+    copied, skipped, missing, failed = install_templates(ids or None)
     src_dir = project_template_dir()
     dest_dir = user_template_dir()
 
@@ -84,15 +84,22 @@ def _cmd_install_templates(ids):
         print(f"  = 已是最新 {tid}（未改动）")
     for tid in missing:
         print(f"  ✗ 项目级找不到 {tid}", file=sys.stderr)
+    for tid, reason in failed:
+        print(f"  ✗ 写入失败 {tid}: {reason}", file=sys.stderr)
 
     if not copied and not skipped:
-        print("[woc] 没有可安装的模板。")
-        return 1 if missing else 0
+        if failed:
+            print("[woc] 没有模板被安装（全部写入失败）", file=sys.stderr)
+        else:
+            print("[woc] 没有可安装的模板。")
+        return 1 if (missing or failed) else 0
 
     print(f"[woc] 完成: 安装 {len(copied)} 个, 未变 {len(skipped)} 个"
-          + (f", 缺失 {len(missing)} 个" if missing else ""))
-    print(f"[woc] 现在这些模板在所有项目里都可用（用户级优先，会覆盖项目级同名 id）")
-    return 1 if missing else 0
+          + (f", 缺失 {len(missing)} 个" if missing else "")
+          + (f", 失败 {len(failed)} 个" if failed else ""))
+    print("[woc] 现在这些模板在所有项目里都可用（用户级优先，会覆盖项目级同名 id）")
+    print("[woc] 注意: <templates> 段已变化，下一次请求的前缀缓存会重建一次。")
+    return 1 if (missing or failed) else 0
 
 
 def _split_query(rest):

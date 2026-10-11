@@ -9,7 +9,7 @@ when: 用户问"最近改了什么 / 上次提交是什么 / 这个改动动了�
 
 用户想快速了解仓库最近发生了什么，不想自己敲 `git log` + `git diff`。
 
-# 参考命令（已验证）
+# 参考命令（作者标注，未经验证）
 
 ```bash
 git log --oneline -n 10; echo '--- files ---'; git show --stat --oneline HEAD
