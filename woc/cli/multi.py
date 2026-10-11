@@ -3,6 +3,7 @@ import sys
 
 from ..colors import C, cerr, cout, eprint, interactive_input
 from ..config import load_config
+from ..context import messages_prefix
 from ..exec import format_exec_result, run_command_capture
 from ..llm import LLMError, StreamMode, call_llm_messages
 from ..prompts import MULTI_TURN_HINT, SYSTEM_PROMPT
@@ -18,10 +19,13 @@ def wocc_main(argv):
 
     cfg = load_config()
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": MULTI_TURN_HINT},
-    ]
+    # 会话级稳定前缀：system prompt + 多轮说明 + template 参考库 + 环境。
+    # 只在开始时构造一次，因此每轮请求的前缀逐字节相同 —— 前缀缓存能持续命中。
+    messages = messages_prefix(
+        multi_turn=True,
+        system_prompt=SYSTEM_PROMPT,
+        multi_turn_hint=MULTI_TURN_HINT,
+    )
 
     eprint("[woc] 已进入多轮会话，输入 :q 退出", C.GREEN, C.BOLD)
 

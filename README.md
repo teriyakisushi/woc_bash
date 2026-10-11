@@ -72,6 +72,78 @@ timeout = 30
 
 不要把包含 API Key 的配置文件提交到 Git 或分享给他人。
 
+## Template 参考库
+
+模板是**写给模型看的参考文本**，用来把"你在这个环境里验证过的命令"固定下来，
+减少模型瞎猜和来回确认。它只是文本，注入给模型参考，**不会被直接执行**。
+
+### 放置位置
+
+```
+<项目>/.woc/templates/*.md      # 项目级
+~/.config/woc/templates/*.md    # 用户级，同名 id 会覆盖项目级
+```
+
+命令生成类入口（`woc`、`wocc`）会自动读取并注入；`woc -c` 聊天模式不注入。
+
+### 模板格式
+
+```markdown
+---
+id: top-ip-from-log
+desc: 按客户端 IP 统计访问量前 N 名
+tags: [nginx, 日志, 统计, awk]
+when: 用户问"访问量最高的 IP / 哪个 IP 请求最多"
+---
+
+# 场景
+分析 Web 访问日志，找出请求量最高的客户端。
+
+# 参考命令（已验证）
+```bash
+awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head -n 10
+```
+
+# 约定
+- combined 格式下 IP 固定在第 1 列。
+
+# 不要这样做
+- 不要用 `cut -d' ' -f1`：请求行本身含空格，某些变体下会切错列。
+```
+
+`id` 可省略，默认取文件名。`desc` / `tags` / `when` 用于后续检索，
+建议都写上。正文会**原样**注入，所以「不要这样做」这类章节可以直接写。
+
+### 管理命令
+
+```bash
+woc --templates          # 列出已加载的模板、来源目录与当前注入策略
+woc --check-templates    # 自检：危险子串误报、多行截断、可移植性坑
+```
+
+目前模板**全量注入**（阈值 24 个）。超过阈值后自动切换为按问题关键词检索
+top-N，无需改模板。
+
+### 注入顺序与缓存
+
+注入的消息顺序固定为：
+
+```
+system: 通用规则 → 多轮说明 → <templates> → <environment> → user: 你的问题
+```
+
+前四段在会话内逐字节不变，因此能持续命中服务端的前缀缓存
+（`prompt_cache_hit_tokens`）。**不要把每次都会变的内容（时间、git 状态、
+实时负载）写进模板**，那会让缓存永久失效。
+
+### 环境变量
+
+```bash
+export WOC_TEMPLATES=0            # 完全关闭模板注入
+export WOC_TEMPLATES_USER=0       # 只关闭用户级模板
+export WOC_TEMPLATES_PROJECT=0    # 只关闭项目级模板
+```
+
 ## 使用
 
 ### 单轮命令

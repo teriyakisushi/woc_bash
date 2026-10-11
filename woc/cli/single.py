@@ -3,7 +3,9 @@ import sys
 
 from ..colors import C, cout, eprint
 from ..config import load_config
-from ..llm import LLMError, StreamMode, call_llm
+from ..context import build_messages
+from ..llm import LLMError, StreamMode, call_llm_messages
+from ..prompts import SYSTEM_PROMPT
 from ..sanitize import ChatResponse, CommandGenError, is_dangerous, sanitize
 
 def woc_main(argv):
@@ -30,8 +32,9 @@ def woc_main(argv):
 
     sys.stdout.write(cout("[assistant] ", C.GREEN, C.BOLD))
     sys.stdout.flush()
+    messages = build_messages(user_input, SYSTEM_PROMPT)
     try:
-        raw = call_llm(user_input, cfg, on_chunk=on_chunk, on_mode=on_mode)
+        raw = call_llm_messages(messages, cfg, on_chunk=on_chunk, on_mode=on_mode)
     except LLMError as e:
         eprint(f"[woc] {e}", C.RED)
         sys.exit(3)

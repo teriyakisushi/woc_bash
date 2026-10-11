@@ -4,6 +4,7 @@ import urllib.error
 import urllib.request
 
 from .config import load_config
+from .context import build_messages
 from .prompts import SYSTEM_PROMPT
 
 _SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
@@ -180,9 +181,14 @@ def call_llm_messages(messages, cfg, on_chunk=None, on_mode=None):
     return call_llm_messages_stream(messages, cfg, on_chunk=on_chunk, on_mode=on_mode)
 
 
-def call_llm(user_input, cfg, on_chunk=None, on_mode=None):
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_input},
-    ]
+def call_llm(user_input, cfg, on_chunk=None, on_mode=None, system_prompt=None,
+             cwd=None, with_templates=True, with_environment=True):
+    """单轮调用。默认自动注入 template 参考库与运行环境（见 woc.context）。"""
+    messages = build_messages(
+        user_input,
+        system_prompt or SYSTEM_PROMPT,
+        cwd=cwd,
+        with_templates=with_templates,
+        with_environment=with_environment,
+    )
     return call_llm_messages(messages, cfg, on_chunk=on_chunk, on_mode=on_mode)
