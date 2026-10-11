@@ -117,19 +117,49 @@ awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head -n
 ### 管理命令
 
 ```bash
-woc --templates          # 列出已加载的模板、来源目录与当前注入策略
-woc --check-templates    # 自检：危险子串误报、多行截断、可移植性坑
+woc --templates                              # 列出模板、来源与两层注入策略
+woc --templates --query "看看日志里哪个 IP 最多"   # 预览某个查询会选中哪些正文
+woc --check-templates                        # 自检：危险子串误报、多行截断、可移植性坑
 ```
 
-目前模板**全量注入**（阈值 24 个）。超过阈值后自动切换为按问题关键词检索
-top-N，无需改模板。
+### 两层注入：索引恒定，正文按预算
+
+模板分两层注入，**两种预算互不挤占**：
+
+| 层 | 内容 | 策略 |
+|---|---|---|
+| 索引层 | `id \| desc \| 适用 \| tags` | **恒定全量**，让模型知道"有什么" |
+| 正文层 | 完整正文 | 按查询相关度 + 字符预算（`BODY_BUDGET`，默认 4000） |
+
+关键点：**检索只决定正文给谁，永远不裁剪索引**。如果按查询裁掉索引，模型就不知道
+未命中的模板存在了。正文预算装得下全部时策略为 `full`，行为与全量注入完全一致；
+装不下时转 `ranked`。
+
+相关度打分：`tags` 命中查询权重 10（中文按 2 字滑窗兜底，所以"看看日志"也能命中
+tag `日志`），`id` 直接出现在查询里权重 20，其余按词命中正文元数据计 1 分。
+
+**所以 `tags` 和 `when` 不是装饰** —— 写得好不好直接决定模板会不会被选中。
+
+### 装到全局（所有项目可用）
+
+项目级模板只在当前仓库生效。想跨项目复用：
+
+```bash
+woc --install-templates              # 把当前项目的模板全部装到用户级
+woc --install-templates git-recent-changes   # 只装指定的几个
+python3 compile.py --global-templates [ID...]  # 等价入口，走安装器
+python3 compile.py --list-templates            # 先看看有哪些
+```
+
+内容相同的模板会被跳过（显示"已是最新"），重复执行是安全的。用户级目录遵循
+`XDG_CONFIG_HOME`，默认 `~/.config/woc/templates`。
 
 ### 注入顺序与缓存
 
 注入的消息顺序固定为：
 
 ```
-system: 通用规则 → 多轮说明 → <templates> → <environment> → user: 你的问题
+system: 通用规则 → 多轮说明 → <templates>(索引+正文) → <environment> → user: 你的问题
 ```
 
 前四段在会话内逐字节不变，因此能持续命中服务端的前缀缓存
@@ -142,6 +172,7 @@ system: 通用规则 → 多轮说明 → <templates> → <environment> → user
 export WOC_TEMPLATES=0            # 完全关闭模板注入
 export WOC_TEMPLATES_USER=0       # 只关闭用户级模板
 export WOC_TEMPLATES_PROJECT=0    # 只关闭项目级模板
+export XDG_CONFIG_HOME=...        # 改用户级模板目录的位置
 ```
 
 ## 使用

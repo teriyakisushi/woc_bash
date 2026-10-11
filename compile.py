@@ -272,6 +272,55 @@ def maybe_write_config(args) -> None:
         log("未提供 API Key，记得之后配 ~/.config/woc/config.toml 或 WOC_API_KEY")
 
 
+# ---------- 模板全局安装 ----------
+def _template_helpers():
+    """从本仓库导入 woc.context 的模板工具。"""
+    here = Path(__file__).resolve().parent
+    if str(here) not in sys.path:
+        sys.path.insert(0, str(here))
+    from woc.context import install_templates, load_templates, user_template_dir
+    return here, install_templates, load_templates, user_template_dir
+
+
+def do_list_templates() -> None:
+    here, _install, load_templates, user_dir = _template_helpers()
+    templates, _ = load_templates(cwd=str(here))
+    if not templates:
+        log(f"{here / '.woc' / 'templates'} 下没有模板")
+        return
+    log(f"本仓库可安装的模板（{len(templates)} 个）:")
+    for tpl in templates:
+        print(f"    {tpl.id:24s} {tpl.desc or '(未写 desc)'}")
+    print()
+    log(f"安装到全局: python3 compile.py --global-templates")
+    log(f"安装指定项: python3 compile.py --global-templates id1 id2")
+    log(f"目标目录  : {user_dir()}")
+
+
+def do_global_templates(ids: list) -> None:
+    here, install_templates, _load, user_dir = _template_helpers()
+    copied, skipped, missing = install_templates(
+        ids or None, project_dir=here, dry_run=False
+    )
+    log(f"来源: {here / '.woc' / 'templates'}")
+    log(f"目标: {user_dir()}")
+    for tid in copied:
+        log(f"✅ 已安装 {tid}")
+    for tid in skipped:
+        log(f"=  已是最新 {tid}")
+    for tid in missing:
+        print(f"[compile] ❌ 找不到模板: {tid}", file=sys.stderr)
+    if not copied and not skipped:
+        log("没有可安装的模板")
+        if missing:
+            sys.exit(1)
+        return
+    log(f"完成: 安装 {len(copied)} 个, 未变 {len(skipped)} 个")
+    log("这些模板现在在所有项目里都可用（用户级优先，会覆盖项目级同名 id）")
+    if missing:
+        sys.exit(1)
+
+
 # ---------- 验证 ----------
 def verify(prefix: Path, rc_files: list[Path]) -> None:
     shell = os.environ.get("SHELL", "/bin/bash")
@@ -397,11 +446,21 @@ def main() -> None:
                         help="卸载 woc / wocc")
     parser.add_argument("--purge-config", action="store_true",
                         help="卸载时同时删除 ~/.config/woc/config.toml")
+    parser.add_argument("--global-templates", nargs="*", metavar="ID",
+                        help="把本仓库 .woc/templates 下的模板安装到 "
+                             "~/.config/woc/templates（装到全局，所有项目可用）。"
+                             "不给 ID 表示全部；可指定若干 ID")
+    parser.add_argument("--list-templates", action="store_true",
+                        help="列出本仓库可安装的模板后退出")
 
     args = parser.parse_args()
 
     try:
-        if args.uninstall:
+        if args.list_templates:
+            do_list_templates()
+        elif args.global_templates is not None:
+            do_global_templates(args.global_templates)
+        elif args.uninstall:
             do_uninstall(args)
         else:
             do_install(args)

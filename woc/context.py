@@ -3,28 +3,33 @@
 设计约束（重要，改动前先读）：
 
 1. 注入内容分为 **stable** 与 **dynamic** 两段。
-   - stable：template 全文、工具约定。每次调用逐字节相同，用于命中服务端的
+   - stable：template 索引 + 正文、通用规则。前缀逐字节相同时命中服务端
      前缀缓存（DeepSeek/OpenAI 的 prompt_cache_hit_tokens）。
-   - dynamic：工作目录、操作系统。只有这些会变，放在 stable 之后，
-     因此缓存前缀不会被破坏。
+   - dynamic：工作目录、操作系统。只有这些会变，放在 stable 之后。
 
    往 stable 段里塞任何"每次都不一样"的东西（时间戳、随机数、git 状态、
    实时负载），都会让缓存永久 miss。这是隐性成本，不要这么做。
 
-2. template 只是**文本**，注入给模型参考，绝不直接执行。
-   执行路径保持唯一：LLM 生成 → sanitize → is_dangerous → 用户确认。
+2. template 分两层注入，**两种预算互不挤占**：
+   - 索引层（恒定，永远全量）：`id | desc | 适用`，让模型知道"有什么"。
+   - 正文层（按预算）：完整正文，让模型知道"怎么写"。
+   **不要**用检索结果去砍索引 —— 那会让模型不知道未命中的模板存在。
+   检索只决定正文给谁。
 
-3. 本轮为全量注入（模板 ≤ FULL_INJECTION_LIMIT 时）。
-   模板变多后改写 `select_templates()` 为关键词索引即可，接口已就位。
+3. template 只是**文本**，注入给模型参考，绝不直接执行。
+   执行路径保持唯一：LLM 生成 → sanitize → is_dangerous → 用户确认。
 """
 
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
-# stable 段保持逐字节稳定所需：目录遍历与渲染顺序必须确定
-FULL_INJECTION_LIMIT = 24
+# 索引层：模板数上限（超过就只保留前 N 个的索引，防极端情况撑爆上下文）
+INDEX_LIMIT = 100
+# 正文层：注入正文的字符预算。模板少时等于全量，多时自动收敛。
+BODY_BUDGET = 4000
 
 TEMPLATE_DIRNAME = "templates"
 USER_TEMPLATE_DIR = (".config", "woc", TEMPLATE_DIRNAME)
@@ -32,6 +37,8 @@ PROJECT_MARKERS = (".git", ".hg", "pyproject.toml", "go.mod", "package.json", "C
 
 FENCE_RE = re.compile(r"^\s*```")
 ID_OK_RE = re.compile(r"^[A-Za-z0-9_.\-\u4e00-\u9fff]+$")
+# 形如 `NAME=value` 的纯赋值行（不是 `NAME=value cmd`）
+ASSIGN_ONLY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=(?:[^;|&]*|\$\([^)]*\)|\"[^\"]*\"|'[^']*')$")
 
 # 已知的可移植性坑：某些命令在非 GNU 用户态下会失败或行为不同。
 # 这里只做提示，不阻断。
@@ -179,9 +186,20 @@ def template_dirs(cwd=None):
         if project is not None:
             dirs.append(project / ".woc" / TEMPLATE_DIRNAME)
     if _env_flag("WOC_TEMPLATES_USER", True):
-        home = Path(os.path.expanduser("~"))
-        dirs.append(home.joinpath(*USER_TEMPLATE_DIR))
+        dirs.append(user_template_dir())
     return dirs
+
+
+def _same_content(path_a, path_b):
+    """两个模板文件内容是否逐字节相同。
+
+    用于 `--install-templates` 之后的常态：用户级是项目级的副本，此时覆盖是
+    预期的，不该每次都刷告警。读失败时按"不同"处理，宁可多提示。
+    """
+    try:
+        return Path(path_a).read_bytes() == Path(path_b).read_bytes()
+    except OSError:
+        return False
 
 
 def load_templates(cwd=None, warn=None):
@@ -206,7 +224,9 @@ def load_templates(cwd=None, warn=None):
                 warn(f"模板已跳过 {path}: {exc}")
                 continue
             if tpl.id in merged:
-                warn(f"模板 {tpl.id!r} 被覆盖: {merged[tpl.id].path} -> {path}")
+                old = merged[tpl.id]
+                if not _same_content(old.path, str(path)):
+                    warn(f"模板 {tpl.id!r} 被覆盖: {old.path} -> {path}")
             else:
                 order.append(tpl.id)
             merged[tpl.id] = tpl
@@ -216,43 +236,128 @@ def load_templates(cwd=None, warn=None):
 
 # ---------------- 检索接口（本轮为全量） ----------------
 
-def select_templates(templates, query="", limit=FULL_INJECTION_LIMIT):
-    """选择要注入的模板。当前策略：全量（按 id 排序，保证前缀稳定）。
+def select_index(templates, limit=INDEX_LIMIT):
+    """索引层：恒定全量（按 id 排序，保证前缀稳定）。
 
-    模板数量超过 limit 后，改写这里为关键词打分即可 —— 调用方无需改动。
-    返回 (selected, strategy_name)。
+    刻意**不**接受 query —— 索引是"有什么"的清单，任何按查询裁剪索引的做法都会
+    让模型不知道未命中模板的存在。裁剪只发生在正文层。
     """
     ordered = sorted(templates, key=lambda t: t.id)
-    if len(ordered) <= limit:
-        return ordered, "full"
-
-    terms = [t for t in re.split(r"[\s,，。;；:：!！?？/]+", query.lower()) if len(t) >= 2]
-    scored = []
-    for tpl in ordered:
-        haystack = tpl.haystack()
-        score = sum(1 for term in terms if term in haystack)
-        scored.append((score, tpl.id, tpl))
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    picked = [tpl for score, _, tpl in scored if score > 0][:limit]
-    if not picked:
-        picked = ordered[:limit]
-    return picked, "keyword"
+    return ordered[:limit]
 
 
-def render_templates(templates):
-    """把模板渲染成注入文本。逐字节确定 —— 不要在这里掺入时间等易变内容。"""
-    units = "\n\n".join(tpl.as_unit() for tpl in templates)
-    return (
-        "<templates>\n"
+def query_terms(query):
+    """切词。中文连续书写，所以除了按标点空白切，还要保留 2 字滑窗。
+
+    `'看看日志'` 按标点切只能得到整串，匹配不到 tag `'日志'`；补上滑窗后才能命中。
+    """
+    lowered = (query or "").lower()
+    terms = set()
+    for chunk in re.split(r"[\s,;:!?/、()（）\[\]【】。，；：！？]+", lowered):
+        if not chunk:
+            continue
+        terms.add(chunk)
+        if all(ord(ch) > 0x2E80 for ch in chunk) and len(chunk) > 2:
+            # 纯 CJK 且没有分隔符：加 2 字滑窗，避免整串当一个词
+            terms.update(chunk[i:i + 2] for i in range(len(chunk) - 1))
+    return {t for t in terms if len(t) >= 2}
+
+
+def score_template(tpl, query):
+    """给模板打分。标签命中权重最高 —— tags 是用户为检索专门写的字段。
+
+    用"标签是查询的子串"而不是"查询词命中标签"，因为中文查询里标签总是更短的一侧：
+    `'看看日志'` 含 `'日志'`。
+    """
+    lowered = (query or "").lower()
+    score = 0
+    for tag in tpl.tags:
+        tag_l = tag.lower().strip()
+        if tag_l and tag_l in lowered:
+            score += 10
+    if tpl.id.lower() in lowered:
+        score += 20
+    haystack = tpl.haystack()
+    for term in query_terms(query):
+        if term in haystack:
+            score += 1
+    return score
+
+
+def select_bodies(templates, query="", budget=BODY_BUDGET):
+    """正文层：按查询相关度 + 字符预算挑选。
+
+    返回 (selected, strategy, scores)。strategy ∈ {"full", "ranked"}。
+    - 全部正文装得下预算 → full（行为与"全量注入"完全一致）
+    - 装不下 → ranked，按分数降序填充，同分按 id 保证确定性
+    """
+    ordered = sorted(templates, key=lambda t: t.id)
+    scores = {t.id: score_template(t, query) for t in ordered}
+    if sum(len(t.as_unit()) for t in ordered) <= budget:
+        return ordered, "full", scores
+
+    ranked = sorted(ordered, key=lambda t: (-scores[t.id], t.id))
+    picked, used = [], 0
+    for tpl in ranked:
+        size = len(tpl.as_unit())
+        if picked and used + size > budget:
+            continue
+        picked.append(tpl)
+        used += size
+    # 保持 id 顺序，让前缀在相同选择下逐字节稳定
+    picked.sort(key=lambda t: t.id)
+    return picked, "ranked", scores
+
+
+def select_templates(templates, query="", limit=None, budget=None):
+    """兼容旧接口：返回 (正文层选中, 策略)。新代码请用 select_index/select_bodies。"""
+    if budget is None:
+        budget = BODY_BUDGET
+        if limit is not None:
+            ordered = sorted(templates, key=lambda t: t.id)
+            if ordered:
+                budget = max(len(t.as_unit()) for t in ordered) * limit
+    selected, strategy, _scores = select_bodies(templates, query=query, budget=budget)
+    return selected, strategy
+
+
+def render_index(templates):
+    """索引层文本：id | desc | 适用 | tags。紧凑，永远全量。"""
+    lines = []
+    for tpl in templates:
+        parts = [f"- {tpl.id}: {tpl.desc or '(未写 desc)'}"]
+        if tpl.when:
+            parts.append(f"适用：{tpl.when}")
+        if tpl.tags:
+            parts.append(f"tags: {', '.join(tpl.tags)}")
+        lines.append(" | ".join(parts))
+    return "可用模板索引：\n" + "\n".join(lines)
+
+
+def render_templates(templates, index=None, strategy="full"):
+    """把模板渲染成注入文本。逐字节确定 —— 不要在这里掺入时间等易变内容。
+
+    index 非空时先给索引，再给正文；正文只覆盖索引的一个子集。
+    """
+    head = [
+        "<templates>",
         "以下是你在这个环境里积累的、已经验证过的命令参考。它们是**参考**，不是必须"
-        "照抄：可以改写以适应本次请求的具体参数。\n"
+        "照抄：可以改写以适应本次请求的具体参数。",
         "冲突时的优先级：用户本次的明确要求 > <environment> 里的环境事实 > 这些模板 >"
-        " 上面的通用规则。\n"
-        "需要同时满足的多个子问题，请合并成**一条**命令，一次答完。\n"
-        "（用户用 @id 提及时，表示他指定要用那个模板。）\n\n"
-        f"{units}\n"
-        "</templates>"
-    )
+        " 上面的通用规则。",
+        "需要同时满足的多个子问题，请合并成**一条**命令，一次答完。",
+        "（用户用 @id 提及时，表示他指定要用那个模板。）",
+    ]
+    sections = []
+    if index:
+        head.append(
+            "下面是全部可用模板的索引。附有正文的模板标注在正文区；只有索引的模板"
+            "需要时可按 id 向用户确认。")
+        sections.append(render_index(index))
+    if templates:
+        units = "\n\n".join(t.as_unit() for t in templates)
+        sections.append(("以下是相关模板的完整正文：\n\n" + units) if index else units)
+    return "\n".join(head) + "\n\n" + "\n\n".join(sections) + "\n</templates>"
 
 
 def render_environment(cwd=None, platform=None):
@@ -268,18 +373,30 @@ def render_environment(cwd=None, platform=None):
     )
 
 
-def stable_context(query="", cwd=None, templates=None, warn=None):
-    """组装 stable 段：template 参考库。无模板时返回 ""。"""
+def stable_context(query="", cwd=None, templates=None, warn=None, detail=None):
+    """组装 stable 段：索引层（恒定）+ 正文层（按预算）。
+
+    detail 传入 dict 时会把选择结果写回去，供 --templates 展示。
+    """
     if templates is None:
         if not _env_flag("WOC_TEMPLATES", True):
             return ""
         templates, _ = load_templates(cwd=cwd, warn=warn)
     if not templates:
         return ""
-    selected, _strategy = select_templates(templates, query=query)
-    if not selected:
-        return ""
-    return render_templates(selected)
+    index = select_index(templates)
+    bodies, strategy, scores = select_bodies(templates, query=query)
+    if detail is not None:
+        detail.update(
+            total=len(templates),
+            indexed=len(index),
+            bodies=[t.id for t in bodies],
+            strategy=strategy,
+            scores=scores,
+            index_chars=len(render_index(index)),
+            body_chars=sum(len(t.as_unit()) for t in bodies),
+        )
+    return render_templates(bodies, index=index, strategy=strategy)
 
 
 # ---------------- 消息组装 ----------------
@@ -317,6 +434,74 @@ def messages_prefix(multi_turn=False, system_prompt="", multi_turn_hint=None,
         stable.append({"role": "system", "content": block})
     stable.append({"role": "system", "content": render_environment(cwd=cwd)})
     return stable
+
+
+# ---------------- 安装到全局 ----------------
+
+def user_template_dir():
+    """用户级模板目录。遵循 XDG_CONFIG_HOME，默认 ~/.config/woc/templates。"""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg).expanduser() / "woc" / TEMPLATE_DIRNAME
+    return Path(os.path.expanduser("~")).joinpath(*USER_TEMPLATE_DIR)
+
+
+def project_template_dir(cwd=None):
+    """当前项目级模板目录；不构成项目时返回 None。"""
+    project = find_project_dir(cwd)
+    if project is None:
+        return None
+    return project / ".woc" / TEMPLATE_DIRNAME
+
+
+def install_templates(ids=None, cwd=None, dry_run=False, warn=None, project_dir=None):
+    """把项目级模板复制到用户级，使其在所有项目里可用。
+
+    ids 为空表示全部。project_dir 显式指定来源目录（不指定则按 cwd 向上查找项目根）。
+    返回 (copied, skipped, missing)，均为 id 列表。
+    - copied：本次安装/覆盖的
+    - skipped：已是最新（内容相同），未改动
+    - missing：指定的 id 在项目级里不存在
+    """
+    warn = warn or _warn
+    if project_dir is not None:
+        src_dir = Path(project_dir) / ".woc" / TEMPLATE_DIRNAME
+    else:
+        src_dir = project_template_dir(cwd)
+    if src_dir is None or not src_dir.is_dir():
+        return [], [], list(ids or [])
+
+    available = {}
+    for path in sorted(src_dir.glob("*.md")):
+        try:
+            tpl = parse_template_file(path)
+        except ValueError as exc:
+            warn(f"模板已跳过 {path}: {exc}")
+            continue
+        available[tpl.id] = (tpl, path)
+
+    wanted = list(ids) if ids else sorted(available)
+    missing = [i for i in wanted if i not in available]
+    dest_dir = user_template_dir()
+    copied, skipped = [], []
+
+    for tid in wanted:
+        if tid not in available:
+            continue
+        _tpl, path = available[tid]
+        dest = dest_dir / path.name
+        try:
+            same = dest.is_file() and dest.read_bytes() == path.read_bytes()
+        except OSError:
+            same = False
+        if same:
+            skipped.append(tid)
+            continue
+        if not dry_run:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, dest)
+        copied.append(tid)
+    return copied, skipped, missing
 
 
 # ---------------- 模板自检 ----------------
@@ -367,7 +552,7 @@ def lint_templates(templates):
     - 参考命令会被 `sanitize` 截断（多行）或被 `is_dangerous` 拦截（子串误报）；
     - 已知的可移植性坑。
     """
-    from .sanitize import is_dangerous
+    from .sanitize import is_assignment_only, is_dangerous
 
     errors = []
     warnings = []
@@ -383,11 +568,17 @@ def lint_templates(templates):
         for _lang, lines in blocks:
             candidates = command_lines(lines)
             if len(candidates) > 1:
-                warnings.append((
-                    tpl.id,
-                    f"代码块含 {len(candidates)} 行命令；`sanitize` 只取第一行，"
-                    "其余会被截断。建议合并成单行（用 && 或 ;）",
-                ))
+                note = (f"代码块含 {len(candidates)} 行命令；`sanitize` 只取第一行，"
+                        "其余会被截断。建议合并成单行（用 && 或 ;）")
+                # 第一行是纯赋值时后果最严重：截断后既不产出输出，变量也不会被用到
+                if is_assignment_only(candidates[0]):
+                    errors.append((
+                        tpl.id,
+                        "第一行是纯变量赋值且后面还有命令 → `sanitize` 会报错拒绝执行。"
+                        "必须合并成单行：" + candidates[0][:50] + " ; ...",
+                    ))
+                else:
+                    warnings.append((tpl.id, note))
             for line in candidates:
                 if is_dangerous(line):
                     errors.append((
