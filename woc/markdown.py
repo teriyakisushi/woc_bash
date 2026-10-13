@@ -41,9 +41,11 @@ def render_markdown(text: str, colors: C) -> str:
             in_code = not in_code
             if not in_code:
                 rendered.append("")
+            index += 1
             continue
         if in_code:
             rendered.append(colors(line, C.CYAN))
+            index += 1
             continue
         line = re.sub(
             r"^(#{1,6})\s+(.+)$",
