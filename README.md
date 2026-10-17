@@ -55,6 +55,7 @@ export WOC_API_KEY="sk-xxxx"
 export WOC_API_BASE="https://api.deepseek.com"
 export WOC_MODEL="deepseek-flash"
 export WOC_TIMEOUT="30"
+export WOC_OUTPUT_MAXTOKENS="4096"
 export WOC_CAPTURE_SUDO="1"   # 等价于 [sudo] capture_output = true
 export WOC_CONTEXT_LS="1"     # 等价于 [context] ls_on_start = true
 ```
@@ -68,6 +69,7 @@ api_key = "sk-xxxx"
 api_base = "https://api.deepseek.com"
 model = "deepseek-flash"
 timeout = 30
+output_maxtokens = 4096
 
 [prefix]
 alias = "woc"
@@ -84,6 +86,9 @@ ls_on_start = false
 
 环境变量优先于配置文件。默认 API Base 是
 `https://api.deepseek.com`，默认模型是 `deepseek-flash`。
+
+`output_maxtokens` 控制单次回复的最大 token 数（默认 `4096`）。调小可以省 token，
+但可能把命令或回答截断；对应环境变量 `WOC_OUTPUT_MAXTOKENS`。
 
 ### 命令名与提示前缀（`[prefix]`）
 

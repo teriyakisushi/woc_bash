@@ -17,7 +17,12 @@ ENV_KEYS = {
     "api_key": "WOC_API_KEY",
     "model": "WOC_MODEL",
     "timeout": "WOC_TIMEOUT",
+    "output_maxtokens": "WOC_OUTPUT_MAXTOKENS",
 }
+
+# 单次回复的最大 token 数
+DEFAULT_OUTPUT_MAXTOKENS = 4096
+
 
 def _to_bool(value):
     return str(value).strip().lower() not in ("", "0", "false", "no", "off")
@@ -43,6 +48,26 @@ def _env_int(name, default, notes):
     except ValueError:
         notes.append(f"环境变量 {name}={raw!r} 非法，已忽略")
         return default
+
+
+def _env_positive_int(name, default, notes):
+    value = _env_int(name, default, notes)
+    if value <= 0:
+        notes.append(f"环境变量 {name}={value!r} 必须大于 0，已忽略")
+        return default
+    return value
+
+
+def _file_positive_int(value, default, notes, name):
+    try:
+        number = int(value)
+    except ValueError:
+        notes.append(f"配置项 {name} 非法: {value!r}，已忽略")
+        return default
+    if number <= 0:
+        notes.append(f"配置项 {name} 必须大于 0: {value!r}，已忽略")
+        return default
+    return number
 
 
 def prefix(cfg, key="woc_prefix"):
@@ -77,6 +102,8 @@ def load_config(path=None):
 
         [context]
         ls_on_start = false
+
+    根级 output_maxtokens 控制单次回复的最大 token 数（默认 4096）。
     """
     notes = []
     cfg = {
@@ -84,6 +111,8 @@ def load_config(path=None):
         "api_key": os.environ.get("WOC_API_KEY", ""),
         "model": os.environ.get("WOC_MODEL", "deepseek-flash"),
         "timeout": _env_int("WOC_TIMEOUT", 30, notes),
+        "output_maxtokens": _env_positive_int(
+            "WOC_OUTPUT_MAXTOKENS", DEFAULT_OUTPUT_MAXTOKENS, notes),
         "prefix": dict(PREFIX_DEFAULTS),
         "sudo": {"capture_output": _env_bool("WOC_CAPTURE_SUDO", False)},
         "context": {"ls_on_start": _env_bool("WOC_CONTEXT_LS", False)},
@@ -128,6 +157,9 @@ def load_config(path=None):
                         cfg[key] = int(value)
                     except ValueError:
                         notes.append(f"配置项 timeout 非法: {value!r}，已忽略")
+                elif key == "output_maxtokens":
+                    cfg[key] = _file_positive_int(
+                        value, DEFAULT_OUTPUT_MAXTOKENS, notes, key)
                 elif key in cfg:
                     cfg[key] = value
     except FileNotFoundError:

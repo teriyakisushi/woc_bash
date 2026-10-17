@@ -97,7 +97,7 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
         "model": cfg["model"],
         "messages": messages,
         "temperature": 0,
-        "max_tokens": 4096,
+        "max_tokens": cfg.get("output_maxtokens", 4096),
         "stream": True,
         # 尽量不让模型把工具调用的控制标记写进正文；sanitize 里还有一层兜底。
         "stop": ["<｜｜DSML｜｜", "</｜｜DSML｜｜>", "<||DSML||", "</||DSML||>"],
