@@ -4,6 +4,36 @@ from .llm import clean_text
 
 # LLM TEXT FILTER
 FENCE_LINE_RE = re.compile(r"^```[a-zA-Z0-9_-]*\s*$|^```\s*$")
+
+# DeepSeek 的 DSML 控制标记（工具调用等），例如：
+#   <｜｜DSML｜｜function_calls> ... </｜｜DSML｜｜function_calls>
+# 兼容全角 ｜｜ 与半角 ||，以及不带名字的 <｜｜DSML｜｜>。
+# 这些标记不是命令，绝不能进 bash。
+_DSML_BARS = r"(?:｜｜|\|\|)"
+_DSML_OPEN = r"<\s*" + _DSML_BARS + r"\s*DSML\s*" + _DSML_BARS + r"[^>]*>"
+_DSML_CLOSE = r"<\s*/\s*" + _DSML_BARS + r"\s*DSML\s*" + _DSML_BARS + r"[^>]*>"
+_DSML_BLOCK_RE = re.compile(_DSML_OPEN + r".*?" + _DSML_CLOSE, re.S)
+_DSML_TAG_RE = re.compile(r"<\s*/?\s*" + _DSML_BARS + r"\s*DSML\s*" + _DSML_BARS + r"[^>]*>")
+# 流被截断或模型少写 `>` 时的残片：从标记开头删到行尾
+_DSML_LOOSE_RE = re.compile(
+    r"<\s*/?\s*" + _DSML_BARS + r"\s*DSML\s*" + _DSML_BARS + r"[^>\n]*(?:>|$)",
+    re.M,
+)
+# 最坏情况：连尖括号都没有
+_DSML_BARE_RE = re.compile(_DSML_BARS + r"\s*DSML\s*" + _DSML_BARS)
+
+
+def strip_dsml(text):
+    """去掉模型漏出来的 DSML 控制标记。
+
+    顺序：整块 → 完整标签 → 行尾残片 → 裸标记。这些都是控制 token，不是命令。
+    """
+    if not text:
+        return text
+    text = _DSML_BLOCK_RE.sub("", text)
+    text = _DSML_TAG_RE.sub("", text)
+    text = _DSML_LOOSE_RE.sub("", text)
+    return _DSML_BARE_RE.sub("", text)
 PROMPT_RE = re.compile(r"^(\$|>|bash\s+-c)\s*")
 CHAT_MARKER = "#CHAT:"
 # 纯变量赋值行：`NAME=...`，且后面没有跟着命令（`NAME=x cmd` 是有输出的，不算）
@@ -63,7 +93,7 @@ class ChatResponse(Exception):
 
 
 def sanitize(raw):
-    text = raw.strip()
+    text = strip_dsml(raw).strip()
 
     if text.lstrip().startswith(CHAT_MARKER):
         content = text.lstrip()[len(CHAT_MARKER):].strip()

@@ -104,8 +104,8 @@ def wocc_main(argv):
 
         try:
             cmd = sanitize(raw)
-        except ChatResponse:
-            messages.append({"role": "assistant", "content": raw})
+        except ChatResponse as chat:
+            messages.append({"role": "assistant", "content": chat.text})
             continue
         except CommandGenError as e:
             eprint(f"[{alias}] {e}", C.RED)

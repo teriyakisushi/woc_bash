@@ -5,6 +5,7 @@ from ..colors import C, cerr, eprint, interactive_input
 from ..config import load_config, prefix
 from ..llm import LLMError, call_llm_messages_stream
 from ..markdown import render_markdown
+from ..sanitize import strip_dsml
 
 CHAT_SYSTEM_PROMPT = """You are {name}, a helpful terminal assistant.
 Answer the user's questions in their language. Use Markdown when it improves
@@ -70,7 +71,7 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
             eprint(f"[{alias}] LLM 调用失败: {exc}", C.RED)
             continue
 
-        answer = "".join(chunks)
+        answer = strip_dsml("".join(chunks))
         if not answer:
             messages.pop()
             eprint(f"[{alias}] LLM 未返回内容", C.RED)
