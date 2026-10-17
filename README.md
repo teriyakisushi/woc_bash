@@ -55,6 +55,7 @@ export WOC_API_KEY="sk-xxxx"
 export WOC_API_BASE="https://api.deepseek.com"
 export WOC_MODEL="deepseek-flash"
 export WOC_TIMEOUT="30"
+export WOC_CAPTURE_SUDO="1"   # 等价于 [sudo] capture_output = true
 ```
 
 ### 配置文件
@@ -72,6 +73,9 @@ alias = "woc"
 woc_prefix = "woc"
 wocc_prefix = "wocc"
 woc_chat_prefix = "woc_chat"
+
+[sudo]
+capture_output = false
 ```
 
 环境变量优先于配置文件。默认 API Base 是
@@ -101,6 +105,20 @@ woc_chat_prefix = "qwe_chat"
 之后所有提示都统一带 `[qwe]` 前缀（与具体是哪个命令无关），System Prompt 里
 也是 `You are qwe, ...`；而帮助/用法会显示各自的名字，例如 `qwee --help`。
 `compile.py` 安装时会依次询问这几个名字，直接回车保留当前值。
+
+### sudo 输出捕获（`[sudo]`）
+
+默认关闭。开启后，`wocc` 在「命令需要 sudo 密码、且没有缓存 ticket」时会用 pty
+（`script`）运行命令：密码仍由你在当前终端输入，但命令输出会被捕获并作为
+`<exec_result>` 反馈给模型。也可以只对本次会话生效：
+
+```bash
+wocc --capture-sudo
+```
+
+对应环境变量 `WOC_CAPTURE_SUDO=1`。注意 root 权限能读到的内容可能包含敏感信息，
+开启前请自行判断；捕获文本会对 `password=`、`token=`、`api_key=` 这类字段脱敏，
+密码本身由 sudo 关闭回显，不会进入输出。`woc` 单轮模式不涉及捕获（输出直接打印到终端）。
 
 不要把包含 API Key 的配置文件提交到 Git 或分享给他人。
 

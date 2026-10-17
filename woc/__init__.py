@@ -1,5 +1,5 @@
 from .colors import C, cerr, cout, eprint, interactive_input
-from .config import load_config, prefix
+from .config import capture_sudo, load_config, prefix
 from .context import (Template, build_messages, lint_templates, load_templates,
                       messages_prefix, render_environment, render_templates,
                       select_templates, stable_context)

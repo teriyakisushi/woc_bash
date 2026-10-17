@@ -19,6 +19,16 @@ ENV_KEYS = {
     "timeout": "WOC_TIMEOUT",
 }
 
+def _to_bool(value):
+    return str(value).strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def _env_bool(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return _to_bool(raw)
+
 
 def default_config_path():
     return os.path.expanduser("~/.config/woc/config.toml")
@@ -41,6 +51,11 @@ def prefix(cfg, key="woc_prefix"):
     return value or PREFIX_DEFAULTS.get(key, "woc")
 
 
+def capture_sudo(cfg):
+    """是否需要捕获需要密码的 sudo 命令输出（[sudo] capture_output）。"""
+    return bool((cfg.get("sudo") or {}).get("capture_output"))
+
+
 def load_config(path=None):
     """读取配置；环境变量优先于配置文件。
 
@@ -50,6 +65,10 @@ def load_config(path=None):
         woc_prefix = "qwe"
         wocc_prefix = "qwee"
         woc_chat_prefix = "qwe_chat"
+
+    以及 [sudo] 段：
+        [sudo]
+        capture_output = false
     """
     notes = []
     cfg = {
@@ -58,6 +77,7 @@ def load_config(path=None):
         "model": os.environ.get("WOC_MODEL", "deepseek-flash"),
         "timeout": _env_int("WOC_TIMEOUT", 30, notes),
         "prefix": dict(PREFIX_DEFAULTS),
+        "sudo": {"capture_output": _env_bool("WOC_CAPTURE_SUDO", False)},
     }
 
     path = path or default_config_path()
@@ -81,6 +101,10 @@ def load_config(path=None):
                 if section == "prefix":
                     if key in PREFIX_DEFAULTS:
                         cfg["prefix"][key] = value
+                    continue
+                if section == "sudo":
+                    if key == "capture_output" and "WOC_CAPTURE_SUDO" not in os.environ:
+                        cfg["sudo"]["capture_output"] = _to_bool(value)
                     continue
                 if section:
                     continue

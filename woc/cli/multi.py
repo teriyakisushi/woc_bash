@@ -2,10 +2,11 @@ import os
 import sys
 
 from ..colors import C, cerr, cout, eprint, interactive_input
-from ..config import load_config, prefix
+from ..config import capture_sudo, load_config, prefix
 from ..context import messages_prefix
 from ..exec import (format_exec_result, format_foreground_result,
-                    needs_privilege, run_command_capture,
+                    needs_privilege, pty_capture_available,
+                    run_command_capture, run_command_capture_pty,
                     run_command_foreground, sudo_ticket_valid)
 from ..llm import LLMError, StreamMode, call_llm_messages
 from ..prompts import MULTI_TURN_HINT, render_system_prompt
@@ -13,15 +14,22 @@ from ..sanitize import (ChatResponse, CommandGenError, clean_text, is_dangerous,
                         is_root_shell, sanitize)
 
 def wocc_main(argv):
+    argv = list(argv)
+    capture_flag = "--capture-sudo" in argv
+    if capture_flag:
+        argv = [item for item in argv if item != "--capture-sudo"]
+
     cfg = load_config()
     name = prefix(cfg, "wocc_prefix")
     alias = prefix(cfg, "alias")
+    capture = capture_flag or capture_sudo(cfg)
 
     if argv and argv[0] in ("-h", "--help"):
         print(f"用法: {name} [首轮自然语言描述]")
         print("进入交互式多轮会话，每轮命令的执行结果会自动反馈给 LLM。")
         print("输入 :q / exit / quit 退出。")
         print("提问（如“解释一下”“为什么...”）会自动进入 chat 模式，不会被执行。")
+        print("  --capture-sudo  需要 sudo 密码时捕获输出并反馈给模型")
         sys.exit(0)
 
     # 会话级稳定前缀：system prompt + 多轮说明 + template 参考库 + 环境。
@@ -167,21 +175,11 @@ def wocc_main(argv):
             })
             continue
 
+        shown = False
         if needs_privilege(cmd):
             if sudo_ticket_valid():
                 out, err, code = run_command_capture(cmd)
-            elif sys.stdin.isatty():
-                eprint(f"[{alias}] 该命令需要 sudo 权限，将在本终端前台执行"
-                       "（输出不会反馈给模型）", C.YELLOW, C.BOLD)
-                code, ferr = run_command_foreground(cmd)
-                if ferr:
-                    eprint(f"[{alias}] {ferr}", C.RED)
-                messages.append({
-                    "role": "user",
-                    "content": format_foreground_result(code, ferr),
-                })
-                continue
-            else:
+            elif not sys.stdin.isatty():
                 eprint(f"[{alias}] ⚠️  命令需要 sudo 密码，但当前输入不是终端，已拒绝：",
                        C.YELLOW, C.BOLD)
                 eprint(f"  {cmd}", C.YELLOW)
@@ -197,14 +195,33 @@ def wocc_main(argv):
                     ),
                 })
                 continue
+            elif capture and pty_capture_available():
+                eprint(f"[{alias}] 该命令需要 sudo 权限，正在 pty 中执行并捕获输出"
+                       "（输出会反馈给模型）", C.YELLOW, C.BOLD)
+                out, err, code = run_command_capture_pty(cmd)
+                shown = True
+            else:
+                if capture:
+                    eprint(f"[{alias}] ⚠️  找不到 script，无法捕获输出，改为前台执行",
+                           C.YELLOW, C.BOLD)
+                eprint(f"[{alias}] 该命令需要 sudo 权限，将在本终端前台执行"
+                       "（输出不会反馈给模型）", C.YELLOW, C.BOLD)
+                code, ferr = run_command_foreground(cmd)
+                if ferr:
+                    eprint(f"[{alias}] {ferr}", C.RED)
+                messages.append({
+                    "role": "user",
+                    "content": format_foreground_result(code, ferr),
+                })
+                continue
         else:
             out, err, code = run_command_capture(cmd)
 
-        if out:
+        if out and not shown:
             sys.stdout.write(out)
             if not out.endswith("\n"):
                 sys.stdout.write("\n")
-        if err:
+        if err and not shown:
             sys.stderr.write(err)
             if not err.endswith("\n"):
                 sys.stderr.write("\n")
