@@ -9,7 +9,8 @@ from .context import (BODY_BUDGET, install_templates, lint_templates,
                       load_templates, project_template_dir, stable_context,
                       user_template_dir)
 
-_LOG_PREFIX = "woc"
+_LOG_ALIAS = "woc"
+_COMMAND = "woc"
 
 
 def _cmd_list_templates(query=None):
@@ -53,7 +54,7 @@ def _cmd_list_templates(query=None):
         print(f"      {tpl.path}")
     if query is None:
         print()
-        print(f'{_tag()} 想看某次查询会选中哪些正文，用: {_LOG_PREFIX} --templates --query "你的问题"')
+        print(f'{_tag()} 想看某次查询会选中哪些正文，用: {_COMMAND} --templates --query "你的问题"')
     return 0
 
 
@@ -115,18 +116,20 @@ def _split_query(rest):
 
 
 def _tag():
-    return f"[{_LOG_PREFIX}]"
+    return f"[{_LOG_ALIAS}]"
 
 
 def main():
-    global _LOG_PREFIX
-    _LOG_PREFIX = prefix(load_config(), "woc_prefix")
+    global _LOG_ALIAS, _COMMAND
+    cfg = load_config()
+    _LOG_ALIAS = prefix(cfg, "alias")
+    _COMMAND = prefix(cfg, "woc_prefix")
     prog = os.path.basename(sys.argv[0])
     argv = sys.argv[1:]
     if prog == "wocc":
         wocc_main(argv)
     elif argv and argv[0] in ("-c", "--chat"):
-        woc_chat_main(argv[1:], name=_LOG_PREFIX, via_woc=True)
+        woc_chat_main(argv[1:], name=_COMMAND, via_woc=True)
     elif argv and argv[0] == "--templates":
         sys.exit(_cmd_list_templates(_split_query(argv[1:])))
     elif argv and argv[0] == "--check-templates":

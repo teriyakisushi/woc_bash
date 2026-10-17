@@ -32,7 +32,7 @@ def wocc_main(argv):
         multi_turn_hint=MULTI_TURN_HINT,
     )
 
-    eprint(f"[{name}] 已进入多轮会话，输入 :q 退出", C.GREEN, C.BOLD)
+    eprint(f"[{alias}] 已进入多轮会话，输入 :q 退出", C.GREEN, C.BOLD)
 
     pending_input = " ".join(argv) if argv else None
 
@@ -47,13 +47,13 @@ def wocc_main(argv):
                     cerr("[user] ", C.MAGENTA, C.BOLD)
                 ).strip()
             except (KeyboardInterrupt, EOFError):
-                eprint(f"\n[{name}] 会话结束", C.GREEN)
+                eprint(f"\n[{alias}] 会话结束", C.GREEN)
                 break
 
         if not user_input:
             continue
         if user_input in (":q", "exit", "quit"):
-            eprint(f"[{name}] 会话结束", C.GREEN)
+            eprint(f"[{alias}] 会话结束", C.GREEN)
             break
 
         messages.append({"role": "user", "content": user_input})
@@ -78,8 +78,8 @@ def wocc_main(argv):
                 messages, cfg, on_chunk=on_chunk, on_mode=on_mode
             )
         except LLMError as e:
-            eprint(f"[{name}] LLM 调用失败：{e}", C.RED)
-            eprint(f"[{name}] 本轮已跳过，可换个说法重试，或 :q 退出", C.YELLOW)
+            eprint(f"[{alias}] LLM 调用失败：{e}", C.RED)
+            eprint(f"[{alias}] 本轮已跳过，可换个说法重试，或 :q 退出", C.YELLOW)
             messages.pop()
             continue
 
@@ -87,7 +87,7 @@ def wocc_main(argv):
         if state["mode"] == StreamMode.COMMAND:
             sys.stdout.write("\n")
             sys.stdout.flush()
-            eprint(f"[{name}] 按 Enter 执行，输入 s 跳过，Ctrl+C 取消", C.GREEN)
+            eprint(f"[{alias}] 按 Enter 执行，输入 s 跳过，Ctrl+C 取消", C.GREEN)
         elif state["mode"] == StreamMode.CHAT:
             sys.stdout.write("\n")
             sys.stdout.flush()
@@ -98,7 +98,7 @@ def wocc_main(argv):
             messages.append({"role": "assistant", "content": raw})
             continue
         except CommandGenError as e:
-            eprint(f"[{name}] {e}", C.RED)
+            eprint(f"[{alias}] {e}", C.RED)
             messages.append({"role": "assistant", "content": raw})
             messages.append({
                 "role": "user",
@@ -115,7 +115,7 @@ def wocc_main(argv):
         messages.append({"role": "assistant", "content": cmd})
 
         if is_root_shell(cmd):
-            eprint(f"[{name}] ⚠️  该命令会打开交互式 root shell，已拒绝：",
+            eprint(f"[{alias}] ⚠️  该命令会打开交互式 root shell，已拒绝：",
                    C.YELLOW, C.BOLD)
             eprint(f"  {cmd}", C.YELLOW)
             messages.append({
@@ -124,7 +124,7 @@ def wocc_main(argv):
                     "<exec_result>\n"
                     "exit_code: 126\n"
                     "stdout:\n\n"
-                    f"stderr:\n命令会打开交互式 root shell，{name} 无法在其中继续工作；"
+                    f"stderr:\n命令会打开交互式 root shell，{alias} 无法在其中继续工作；"
                     "请改成具体的非交互命令。\n"
                     "</exec_result>"
                 ),
@@ -132,7 +132,7 @@ def wocc_main(argv):
             continue
 
         if is_dangerous(cmd):
-            eprint(f"[{name}] ⚠️  检测到潜在危险命令，已拒绝：", C.YELLOW, C.BOLD)
+            eprint(f"[{alias}] ⚠️  检测到潜在危险命令，已拒绝：", C.YELLOW, C.BOLD)
             eprint(f"  {cmd}", C.YELLOW)
             messages.append({
                 "role": "user",
@@ -150,11 +150,11 @@ def wocc_main(argv):
             ans = interactive_input(prompt="")
 
         except (KeyboardInterrupt, EOFError):
-            eprint(f"\n[{name}] 会话结束", C.GREEN)
+            eprint(f"\n[{alias}] 会话结束", C.GREEN)
             break
 
         if ans.strip().lower() == "s":
-            eprint(f"[{name}] 已跳过", C.YELLOW)
+            eprint(f"[{alias}] 已跳过", C.YELLOW)
             messages.append({
                 "role": "user",
                 "content": (
@@ -171,18 +171,18 @@ def wocc_main(argv):
             if sudo_ticket_valid():
                 out, err, code = run_command_capture(cmd)
             elif sys.stdin.isatty():
-                eprint(f"[{name}] 该命令需要 sudo 权限，将在本终端前台执行"
+                eprint(f"[{alias}] 该命令需要 sudo 权限，将在本终端前台执行"
                        "（输出不会反馈给模型）", C.YELLOW, C.BOLD)
                 code, ferr = run_command_foreground(cmd)
                 if ferr:
-                    eprint(f"[{name}] {ferr}", C.RED)
+                    eprint(f"[{alias}] {ferr}", C.RED)
                 messages.append({
                     "role": "user",
                     "content": format_foreground_result(code, ferr),
                 })
                 continue
             else:
-                eprint(f"[{name}] ⚠️  命令需要 sudo 密码，但当前输入不是终端，已拒绝：",
+                eprint(f"[{alias}] ⚠️  命令需要 sudo 密码，但当前输入不是终端，已拒绝：",
                        C.YELLOW, C.BOLD)
                 eprint(f"  {cmd}", C.YELLOW)
                 messages.append({
@@ -191,7 +191,7 @@ def wocc_main(argv):
                         "<exec_result>\n"
                         "exit_code: 126\n"
                         "stdout:\n\n"
-                        f"stderr:\n需要 sudo 密码，但 {name} 的输入不是终端。"
+                        f"stderr:\n需要 sudo 密码，但 {alias} 的输入不是终端。"
                         "请在终端里直接运行，或先 sudo -v 缓存凭证后重试。\n"
                         "</exec_result>"
                     ),
@@ -210,7 +210,7 @@ def wocc_main(argv):
                 sys.stderr.write("\n")
 
         if code != 0:
-            eprint(f"[{name}] exit_code={code}", C.RED)
+            eprint(f"[{alias}] exit_code={code}", C.RED)
 
         messages.append({
             "role": "user",

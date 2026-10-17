@@ -41,13 +41,13 @@ def woc_main(argv):
     try:
         raw = call_llm_messages(messages, cfg, on_chunk=on_chunk, on_mode=on_mode)
     except LLMError as e:
-        eprint(f"[{name}] {e}", C.RED)
+        eprint(f"[{alias}] {e}", C.RED)
         sys.exit(3)
 
     if state["mode"] == StreamMode.COMMAND:
         sys.stdout.write("\n")
         sys.stdout.flush()
-        eprint(f"[{name}] 按 Enter 执行，Ctrl+C 取消", C.GREEN)
+        eprint(f"[{alias}] 按 Enter 执行，Ctrl+C 取消", C.GREEN)
     elif state["mode"] == StreamMode.CHAT:
         sys.stdout.write("\n\n")
         sys.stdout.flush()
@@ -57,29 +57,29 @@ def woc_main(argv):
     except ChatResponse:
         sys.exit(0)
     except CommandGenError as e:
-        eprint(f"[{name}] {e}", C.RED)
+        eprint(f"[{alias}] {e}", C.RED)
         sys.exit(4)
 
     if is_root_shell(cmd):
-        eprint(f"[{name}] ⚠️  该命令会打开交互式 root shell，已拒绝：",
+        eprint(f"[{alias}] ⚠️  该命令会打开交互式 root shell，已拒绝：",
                C.YELLOW, C.BOLD)
         eprint(f"  {cmd}", C.YELLOW)
-        eprint(f"[{name}] 请改成具体的非交互命令（如 sudo docker ps）", C.GREEN)
+        eprint(f"[{alias}] 请改成具体的非交互命令（如 sudo docker ps）", C.GREEN)
         sys.exit(6)
 
     if is_dangerous(cmd):
-        eprint(f"[{name}] ⚠️  检测到潜在危险命令，已拒绝：", C.YELLOW, C.BOLD)
+        eprint(f"[{alias}] ⚠️  检测到潜在危险命令，已拒绝：", C.YELLOW, C.BOLD)
         eprint(f"  {cmd}", C.YELLOW)
         sys.exit(5)
 
     if needs_privilege(cmd):
-        eprint(f"[{name}] ⚠️  该命令将以 root 权限执行，sudo 会在此终端要求密码",
+        eprint(f"[{alias}] ⚠️  该命令将以 root 权限执行，sudo 会在此终端要求密码",
                C.YELLOW, C.BOLD)
 
     try:
         input()
     except (KeyboardInterrupt, EOFError):
-        eprint(f"\n[{name}] 已取消", C.YELLOW)
+        eprint(f"\n[{alias}] 已取消", C.YELLOW)
         sys.exit(130)
 
     os.execvp("bash", ["bash", "-c", cmd])

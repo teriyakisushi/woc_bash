@@ -83,10 +83,10 @@ woc_chat_prefix = "woc_chat"
 
 | 键 | 作用 |
 |---|---|
-| `alias` | 日志/提示前缀，也是 System Prompt 里助手自称的名字 |
-| `woc_prefix` | `woc` 的命令名，它的日志前缀也是这个名字 |
-| `wocc_prefix` | `wocc` 的命令名与日志前缀 |
-| `woc_chat_prefix` | `woc_chat` 的命令名与日志前缀 |
+| `alias` | 所有日志/提示的前缀，也是 System Prompt 里助手自称的名字 |
+| `woc_prefix` | `woc` 的命令名（帮助/用法里显示的名字） |
+| `wocc_prefix` | `wocc` 的命令名 |
+| `woc_chat_prefix` | `woc_chat` 的命令名 |
 
 `woc -c` 跟随 `woc_prefix`（写作 `woc_prefix -c`），不能单独改名。例如：
 
@@ -98,8 +98,9 @@ wocc_prefix = "qwee"
 woc_chat_prefix = "qwe_chat"
 ```
 
-之后提示会变成 `[qwe]` / `[qwee]` / `[qwe_chat]`，System Prompt 里也是
-`You are qwe, ...`。`compile.py` 安装时会依次询问这几个名字，直接回车保留当前值。
+之后所有提示都统一带 `[qwe]` 前缀（与具体是哪个命令无关），System Prompt 里
+也是 `You are qwe, ...`；而帮助/用法会显示各自的名字，例如 `qwee --help`。
+`compile.py` 安装时会依次询问这几个名字，直接回车保留当前值。
 
 不要把包含 API Key 的配置文件提交到 Git 或分享给他人。
 
