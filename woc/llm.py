@@ -182,16 +182,20 @@ def call_llm_messages(messages, cfg, on_chunk=None, on_mode=None):
 
 
 def call_llm(user_input, cfg, on_chunk=None, on_mode=None, system_prompt=None,
-             cwd=None, with_templates=True, with_environment=True):
+             cwd=None, with_templates=True, with_environment=True,
+             with_listing=None):
     """单轮调用。默认自动注入 template 参考库与运行环境（见 woc.context）。"""
     if system_prompt is None:
         system_prompt = SYSTEM_PROMPT.replace(
             "{name}", cfg.get("prefix", {}).get("alias", "woc"))
+    if with_listing is None:
+        with_listing = bool((cfg.get("context") or {}).get("ls_on_start"))
     messages = build_messages(
         user_input,
         system_prompt,
         cwd=cwd,
         with_templates=with_templates,
         with_environment=with_environment,
+        with_listing=with_listing,
     )
     return call_llm_messages(messages, cfg, on_chunk=on_chunk, on_mode=on_mode)

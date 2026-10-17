@@ -2,7 +2,7 @@ import os
 import sys
 
 from ..colors import C, cout, eprint
-from ..config import load_config, prefix
+from ..config import load_config, ls_on_start, prefix
 from ..context import build_messages
 from ..exec import needs_privilege
 from ..llm import LLMError, StreamMode, call_llm_messages
@@ -14,6 +14,7 @@ def woc_main(argv):
     cfg = load_config()
     name = prefix(cfg, "woc_prefix")
     alias = prefix(cfg, "alias")
+    with_listing = ls_on_start(cfg)
 
     if not argv or argv[0] in ("-h", "--help"):
         print(f"用法: {name} <自然语言描述>")
@@ -37,7 +38,11 @@ def woc_main(argv):
 
     sys.stdout.write(cout("[assistant] ", C.GREEN, C.BOLD))
     sys.stdout.flush()
-    messages = build_messages(user_input, render_system_prompt(alias))
+    messages = build_messages(
+        user_input,
+        render_system_prompt(alias),
+        with_listing=with_listing,
+    )
     try:
         raw = call_llm_messages(messages, cfg, on_chunk=on_chunk, on_mode=on_mode)
     except LLMError as e:

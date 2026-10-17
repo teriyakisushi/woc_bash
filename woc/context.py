@@ -19,11 +19,16 @@
 
 3. template 只是**文本**，注入给模型参考，绝不直接执行。
    执行路径保持唯一：LLM 生成 → sanitize → is_dangerous → 用户确认。
+
+4. 目录快照（render_listing）默认关闭，由 [context] ls_on_start 控制。
+   `wocc` 只在启动时生成一次、且只放进第一次请求；`woc` 单轮每次调用生成。
+   不要把它写进 stable 前缀（见 multi.py 的 first_turn）。
 """
 
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -438,6 +443,60 @@ def _static_facts():
     return _STATIC_FACTS
 
 
+LS_MAX_LINES = 200
+LS_MAX_CHARS = 4000
+
+
+def _run_ls(cwd):
+    try:
+        proc = subprocess.run(
+            ["ls", "-alF", "--color=never", cwd],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.decode("utf-8", "replace").rstrip("\n")
+
+
+def render_listing(cwd=None, max_lines=LS_MAX_LINES, max_chars=LS_MAX_CHARS):
+    """启动时对当前目录做一次 `ls -alF` 快照，供模型参考。
+
+    只在调用方要求时生成（见 [context] ls_on_start）；内容可能很快过期，
+    所以提示里明确要求模型不要硬编码文件名。
+    """
+    cwd = cwd or os.getcwd()
+    text = _run_ls(cwd)
+    if not text:
+        return ""
+    lines = text.splitlines()
+    truncated = False
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        truncated = True
+    body = "\n".join(lines)
+    if len(body) > max_chars:
+        body = body[:max_chars]
+        truncated = True
+    header = (
+        "启动时对当前目录执行 `ls -alF` 的快照。它可能已经过期：不要硬编码这里的"
+        "文件名，需要准确结果时请生成新的命令去读取。"
+    )
+    if truncated:
+        header += "（输出已截断）"
+    return "\n".join([
+        "<directory_listing>",
+        header,
+        f"directory: {cwd}",
+        body,
+        "</directory_listing>",
+    ])
+
+
 def render_environment(cwd=None, platform=None, facts=None):
     """dynamic 段：只放会变的环境事实，必须排在 stable 段之后。
 
@@ -488,7 +547,7 @@ def stable_context(query="", cwd=None, templates=None, warn=None, detail=None):
 
 def build_messages(user_input, system_prompt, cwd=None, multi_turn_hint=None,
                    query=None, with_templates=True, with_environment=True,
-                   templates=None):
+                   templates=None, with_listing=False):
     """组装一次请求的 messages。
 
     顺序刻意如此：stable 内容在前、dynamic 内容在后、用户输入最后。
@@ -504,6 +563,10 @@ def build_messages(user_input, system_prompt, cwd=None, multi_turn_hint=None,
             messages.append({"role": "system", "content": block})
     if with_environment:
         messages.append({"role": "system", "content": render_environment(cwd=cwd)})
+    if with_listing:
+        listing = render_listing(cwd=cwd)
+        if listing:
+            messages.append({"role": "system", "content": listing})
     messages.append({"role": "user", "content": user_input})
     return messages
 

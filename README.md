@@ -56,6 +56,7 @@ export WOC_API_BASE="https://api.deepseek.com"
 export WOC_MODEL="deepseek-flash"
 export WOC_TIMEOUT="30"
 export WOC_CAPTURE_SUDO="1"   # 等价于 [sudo] capture_output = true
+export WOC_CONTEXT_LS="1"     # 等价于 [context] ls_on_start = true
 ```
 
 ### 配置文件
@@ -76,6 +77,9 @@ woc_chat_prefix = "woc_chat"
 
 [sudo]
 capture_output = false
+
+[context]
+ls_on_start = false
 ```
 
 环境变量优先于配置文件。默认 API Base 是
@@ -119,6 +123,17 @@ wocc --capture-sudo
 对应环境变量 `WOC_CAPTURE_SUDO=1`。注意 root 权限能读到的内容可能包含敏感信息，
 开启前请自行判断；捕获文本会对 `password=`、`token=`、`api_key=` 这类字段脱敏，
 密码本身由 sudo 关闭回显，不会进入输出。`woc` 单轮模式不涉及捕获（输出直接打印到终端）。
+
+### 启动时注入目录列表（`[context]`）
+
+默认关闭。开启后：
+
+- `woc`（单轮）每次调用都会注入当前目录的 `ls -alF` 快照；
+- `wocc` 只在**启动时生成一次**，并且只放进**第一次请求**，后续多轮不再携带；
+- `woc_chat` 不注入。
+
+快照可能过期，注入文本里已明确要求模型不要硬编码文件名、需要准确结果时重新生成命令；
+输出最多 200 行 / 4000 字符，超出会标注「已截断」。对应环境变量 `WOC_CONTEXT_LS=1`。
 
 不要把包含 API Key 的配置文件提交到 Git 或分享给他人。
 

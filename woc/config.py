@@ -56,6 +56,11 @@ def capture_sudo(cfg):
     return bool((cfg.get("sudo") or {}).get("capture_output"))
 
 
+def ls_on_start(cfg):
+    """是否在启动/单轮调用时注入一次 `ls -alF` 目录快照（[context] ls_on_start）。"""
+    return bool((cfg.get("context") or {}).get("ls_on_start"))
+
+
 def load_config(path=None):
     """读取配置；环境变量优先于配置文件。
 
@@ -66,9 +71,12 @@ def load_config(path=None):
         wocc_prefix = "qwee"
         woc_chat_prefix = "qwe_chat"
 
-    以及 [sudo] 段：
+    以及 [sudo] / [context] 段：
         [sudo]
         capture_output = false
+
+        [context]
+        ls_on_start = false
     """
     notes = []
     cfg = {
@@ -78,6 +86,7 @@ def load_config(path=None):
         "timeout": _env_int("WOC_TIMEOUT", 30, notes),
         "prefix": dict(PREFIX_DEFAULTS),
         "sudo": {"capture_output": _env_bool("WOC_CAPTURE_SUDO", False)},
+        "context": {"ls_on_start": _env_bool("WOC_CONTEXT_LS", False)},
     }
 
     path = path or default_config_path()
@@ -105,6 +114,10 @@ def load_config(path=None):
                 if section == "sudo":
                     if key == "capture_output" and "WOC_CAPTURE_SUDO" not in os.environ:
                         cfg["sudo"]["capture_output"] = _to_bool(value)
+                    continue
+                if section == "context":
+                    if key == "ls_on_start" and "WOC_CONTEXT_LS" not in os.environ:
+                        cfg["context"]["ls_on_start"] = _to_bool(value)
                     continue
                 if section:
                     continue

@@ -1,8 +1,8 @@
 from .colors import C, cerr, cout, eprint, interactive_input
-from .config import capture_sudo, load_config, prefix
+from .config import capture_sudo, load_config, ls_on_start, prefix
 from .context import (Template, build_messages, lint_templates, load_templates,
-                      messages_prefix, render_environment, render_templates,
-                      select_templates, stable_context)
+                      messages_prefix, render_environment, render_listing,
+                      render_templates, select_templates, stable_context)
 from .exec import (format_exec_result, format_foreground_result,
                    needs_privilege, run_command_capture,
                    run_command_foreground, sudo_ticket_valid)
