@@ -3,7 +3,7 @@ import sys
 
 from ..colors import C, cerr, cout, eprint, interactive_input
 from ..config import capture_sudo, load_config, ls_on_start, prefix
-from ..context import messages_prefix, render_listing
+from ..context import messages_prefix
 from ..exec import (format_exec_result, format_foreground_result,
                     needs_privilege, pty_capture_available,
                     run_command_capture, run_command_capture_pty,
@@ -33,15 +33,13 @@ def wocc_main(argv):
         sys.exit(0)
 
     # 会话级稳定前缀：system prompt + 多轮说明 + template 参考库 + 环境。
-    # 只在开始时构造一次，因此从第二轮起前缀逐字节相同 —— 前缀缓存能持续命中。
-    # 目录快照只在启动时生成一次，并且只放进“第一次请求”里；后续轮次不再携带。
-    listing = render_listing() if ls_on_start(cfg) else ""
-    first_turn = True
-
+    # 只在开始时构造一次，因此每轮请求的前缀逐字节相同 —— 前缀缓存能持续命中。
+    # 目录快照也只在启动时生成一次，随后作为前缀的一部分复用，不重复执行 ls。
     messages = messages_prefix(
         multi_turn=True,
         system_prompt=render_system_prompt(alias),
         multi_turn_hint=MULTI_TURN_HINT,
+        with_listing=ls_on_start(cfg),
     )
 
     eprint(f"[{alias}] 已进入多轮会话，输入 :q 退出", C.GREEN, C.BOLD)
@@ -85,23 +83,15 @@ def wocc_main(argv):
         # 显式从新行开始，避免 stdout 缓冲或重定向时命令粘在用户输入后面。
         sys.stdout.write("\n" + cout("[assistant] ", C.GREEN, C.BOLD))
         sys.stdout.flush()
-        call_messages = messages
-        if first_turn and listing:
-            # 插在第一条 user 输入之前，只发这一次；不写回 messages。
-            call_messages = (messages[:-1]
-                             + [{"role": "system", "content": listing}]
-                             + messages[-1:])
         try:
             raw = call_llm_messages(
-                call_messages, cfg, on_chunk=on_chunk, on_mode=on_mode
+                messages, cfg, on_chunk=on_chunk, on_mode=on_mode
             )
         except LLMError as e:
             eprint(f"[{alias}] LLM 调用失败：{e}", C.RED)
             eprint(f"[{alias}] 本轮已跳过，可换个说法重试，或 :q 退出", C.YELLOW)
             messages.pop()
             continue
-
-        first_turn = False
 
         # 命令模式：命令已流完，补换行，再打印提示
         if state["mode"] == StreamMode.COMMAND:

@@ -21,8 +21,8 @@
    执行路径保持唯一：LLM 生成 → sanitize → is_dangerous → 用户确认。
 
 4. 目录快照（render_listing）默认关闭，由 [context] ls_on_start 控制。
-   `wocc` 只在启动时生成一次、且只放进第一次请求；`woc` 单轮每次调用生成。
-   不要把它写进 stable 前缀（见 multi.py 的 first_turn）。
+   `wocc` 只在启动时生成一次，并作为 stable 前缀的一部分复用；
+   `woc` 单轮每次调用生成。它属于 dynamic 事实，不要写进模板或 system prompt。
 """
 
 import os
@@ -572,7 +572,7 @@ def build_messages(user_input, system_prompt, cwd=None, multi_turn_hint=None,
 
 
 def messages_prefix(multi_turn=False, system_prompt="", multi_turn_hint=None,
-                   cwd=None, templates=None):
+                   cwd=None, templates=None, with_listing=False):
     """只要 system 前缀（多轮会话每轮复用的部分），不含 user 消息。"""
     stable = [{"role": "system", "content": system_prompt}]
     if multi_turn and multi_turn_hint:
@@ -581,6 +581,10 @@ def messages_prefix(multi_turn=False, system_prompt="", multi_turn_hint=None,
     if block:
         stable.append({"role": "system", "content": block})
     stable.append({"role": "system", "content": render_environment(cwd=cwd)})
+    if with_listing:
+        listing = render_listing(cwd=cwd)
+        if listing:
+            stable.append({"role": "system", "content": listing})
     return stable
 
 
