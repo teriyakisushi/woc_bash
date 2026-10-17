@@ -106,6 +106,21 @@ def sanitize(raw):
     raise CommandGenError("LLM 未返回有效命令")
 
 
+# 会打开交互式 root shell 的命令。在 wocc 的捕获路径里会挂住；在单轮模式里
+# 等于把终端交给一个不受 woc 约束的 root shell，因此两种入口都直接拒绝。
+# 注意只认"命令位置"上的 su：`grep su` 这类参数不该被误判。
+ROOT_SHELL_PATTERNS = [
+    # sudo -i / -s / --login / --shell（含组合短选项，如 -si、-H -i）
+    re.compile(r"\bsudo\b[^;&|]*\s(?:-[A-Za-z]*[is][A-Za-z]*|--login\b|--shell\b)"),
+    # 裸 su、sudo su、exec su ...
+    re.compile(r"(?:^|[;&|]\s*|\bsudo\s+|\bexec\s+|\btime\s+)su(?:\s|$)"),
+]
+
+
+def is_root_shell(cmd):
+    return any(re.search(p, cmd) for p in ROOT_SHELL_PATTERNS)
+
+
 DANGEROUS_PATTERNS = [
     r"\brm\s+-rf\s+/(\s|$)",
     r"\bmkfs\b",

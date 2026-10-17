@@ -4,10 +4,13 @@ import sys
 from ..colors import C, cerr, cout, eprint, interactive_input
 from ..config import load_config
 from ..context import messages_prefix
-from ..exec import format_exec_result, run_command_capture
+from ..exec import (format_exec_result, format_foreground_result,
+                    needs_privilege, run_command_capture,
+                    run_command_foreground, sudo_ticket_valid)
 from ..llm import LLMError, StreamMode, call_llm_messages
 from ..prompts import MULTI_TURN_HINT, SYSTEM_PROMPT
-from ..sanitize import ChatResponse, CommandGenError, clean_text, is_dangerous, sanitize
+from ..sanitize import (ChatResponse, CommandGenError, clean_text, is_dangerous,
+                        is_root_shell, sanitize)
 
 def wocc_main(argv):
     if argv and argv[0] in ("-h", "--help"):
@@ -109,6 +112,23 @@ def wocc_main(argv):
 
         messages.append({"role": "assistant", "content": cmd})
 
+        if is_root_shell(cmd):
+            eprint("[woc] ⚠️  该命令会打开交互式 root shell，已拒绝：",
+                   C.YELLOW, C.BOLD)
+            eprint(f"  {cmd}", C.YELLOW)
+            messages.append({
+                "role": "user",
+                "content": (
+                    "<exec_result>\n"
+                    "exit_code: 126\n"
+                    "stdout:\n\n"
+                    "stderr:\n命令会打开交互式 root shell，woc 无法在其中继续工作；"
+                    "请改成具体的非交互命令。\n"
+                    "</exec_result>"
+                ),
+            })
+            continue
+
         if is_dangerous(cmd):
             eprint("[woc] ⚠️  检测到潜在危险命令，已拒绝：", C.YELLOW, C.BOLD)
             eprint(f"  {cmd}", C.YELLOW)
@@ -145,7 +165,38 @@ def wocc_main(argv):
             })
             continue
 
-        out, err, code = run_command_capture(cmd)
+        if needs_privilege(cmd):
+            if sudo_ticket_valid():
+                out, err, code = run_command_capture(cmd)
+            elif sys.stdin.isatty():
+                eprint("[woc] 该命令需要 sudo 权限，将在本终端前台执行"
+                       "（输出不会反馈给模型）", C.YELLOW, C.BOLD)
+                code, ferr = run_command_foreground(cmd)
+                if ferr:
+                    eprint(f"[woc] {ferr}", C.RED)
+                messages.append({
+                    "role": "user",
+                    "content": format_foreground_result(code, ferr),
+                })
+                continue
+            else:
+                eprint("[woc] ⚠️  命令需要 sudo 密码，但当前输入不是终端，已拒绝：",
+                       C.YELLOW, C.BOLD)
+                eprint(f"  {cmd}", C.YELLOW)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "<exec_result>\n"
+                        "exit_code: 126\n"
+                        "stdout:\n\n"
+                        "stderr:\n需要 sudo 密码，但 wocc 的输入不是终端。"
+                        "请在终端里直接运行，或先 sudo -v 缓存凭证后重试。\n"
+                        "</exec_result>"
+                    ),
+                })
+                continue
+        else:
+            out, err, code = run_command_capture(cmd)
 
         if out:
             sys.stdout.write(out)

@@ -5,7 +5,8 @@
 1. 注入内容分为 **stable** 与 **dynamic** 两段。
    - stable：template 索引 + 正文、通用规则。前缀逐字节相同时命中服务端
      前缀缓存（DeepSeek/OpenAI 的 prompt_cache_hit_tokens）。
-   - dynamic：工作目录、操作系统。只有这些会变，放在 stable 之后。
+   - dynamic：工作目录、平台、发行版、uid/groups、容器类型。只有这些会变，
+     放在 stable 之后。
 
    往 stable 段里塞任何"每次都不一样"的东西（时间戳、随机数、git 状态、
    实时负载），都会让缓存永久 miss。这是隐性成本，不要这么做。
@@ -363,17 +364,96 @@ def render_templates(templates, index=None, strategy="full"):
     return "\n".join(head) + "\n\n" + "\n\n".join(sections) + "\n</templates>"
 
 
-def render_environment(cwd=None, platform=None):
-    """dynamic 段：只放会变的环境事实，必须排在 stable 段之后。"""
+_STATIC_FACTS = None
+
+
+def _read_os_pretty_name():
+    try:
+        with open("/etc/os-release", encoding="utf-8") as handle:
+            for line in handle:
+                key, _, value = line.strip().partition("=")
+                if key == "PRETTY_NAME" and value:
+                    return value.strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
+def _detect_container():
+    if os.path.exists("/.dockerenv"):
+        return "docker"
+    if os.path.exists("/run/.containerenv"):
+        return "podman"
+    try:
+        with open("/proc/version", encoding="utf-8") as handle:
+            if "microsoft" in handle.read().lower():
+                return "wsl"
+    except OSError:
+        pass
+    return ""
+
+
+def _identity_facts():
+    facts = []
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if getuid is None or getgid is None:
+        return facts
+    facts.append(f"uid: {getuid()} (gid {getgid()})")
+    try:
+        import grp
+        names = []
+        for gid in [getgid(), *os.getgroups()]:
+            try:
+                name = grp.getgrgid(gid).gr_name
+            except KeyError:
+                continue
+            if name not in names:
+                names.append(name)
+    except (ImportError, OSError, AttributeError):
+        return facts
+    if names:
+        facts.append("groups: " + ", ".join(names[:12]))
+    return facts
+
+
+def _static_facts():
+    """进程内常量事实：发行版、uid/groups、容器类型。
+
+    只算一次，保证多次 build_messages 的 <environment> 逐字节稳定。
+    """
+    global _STATIC_FACTS
+    if _STATIC_FACTS is None:
+        facts = []
+        name = _read_os_pretty_name()
+        if name:
+            facts.append(f"os: {name}")
+        facts.extend(_identity_facts())
+        container = _detect_container()
+        if container:
+            facts.append(f"container: {container}")
+        _STATIC_FACTS = facts
+    return _STATIC_FACTS
+
+
+def render_environment(cwd=None, platform=None, facts=None):
+    """dynamic 段：只放会变的环境事实，必须排在 stable 段之后。
+
+    facts 不传时使用进程内缓存的事实（发行版 / uid / groups / 容器类型）。
+    """
     cwd = cwd or os.getcwd()
-    platform = platform or os.uname().sysname
-    return (
-        "<environment>\n"
-        f"current working directory: {cwd}\n"
-        f"platform: {platform} (shell: bash)\n"
-        "用户在终端里，命令执行前会有人工确认。\n"
-        "</environment>"
-    )
+    if platform is None:
+        uname = getattr(os, "uname", None)
+        platform = uname().sysname if uname else "Linux"
+    lines = [
+        "<environment>",
+        f"current working directory: {cwd}",
+        f"platform: {platform} (shell: bash)",
+    ]
+    lines.extend(facts if facts is not None else _static_facts())
+    lines.append("用户在终端里，命令执行前会有人工确认。")
+    lines.append("</environment>")
+    return "\n".join(lines)
 
 
 def stable_context(query="", cwd=None, templates=None, warn=None, detail=None):
