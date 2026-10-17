@@ -56,7 +56,9 @@ PORTABILITY_NOTES = (
 
 
 def _warn(msg):
-    sys.stderr.write(f"[woc] {msg}\n")
+    from .config import load_config, prefix
+    name = prefix(load_config(), "alias")
+    sys.stderr.write(f"[{name}] {msg}\n")
     sys.stderr.flush()
 
 

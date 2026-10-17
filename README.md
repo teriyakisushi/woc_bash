@@ -30,6 +30,7 @@ python3 compile.py --key sk-xxxx
 ```
 
 安装器默认把命令放到 `~/bin`，并尝试将该目录加入当前 Shell 的配置文件。
+安装时会询问日志别名和三个命令名（直接回车用默认值，见下面的 `[prefix]`）。
 也可以跳过 API Key 配置，稍后手动设置：
 
 ```bash
@@ -65,10 +66,40 @@ api_key = "sk-xxxx"
 api_base = "https://api.deepseek.com"
 model = "deepseek-flash"
 timeout = 30
+
+[prefix]
+alias = "woc"
+woc_prefix = "woc"
+wocc_prefix = "wocc"
+woc_chat_prefix = "woc_chat"
 ```
 
 环境变量优先于配置文件。默认 API Base 是
 `https://api.deepseek.com`，默认模型是 `deepseek-flash`。
+
+### 命令名与提示前缀（`[prefix]`）
+
+`[prefix]` 用来把 `woc` / `wocc` / `woc_chat` 换成别的名字：
+
+| 键 | 作用 |
+|---|---|
+| `alias` | 日志/提示前缀，也是 System Prompt 里助手自称的名字 |
+| `woc_prefix` | `woc` 的命令名，它的日志前缀也是这个名字 |
+| `wocc_prefix` | `wocc` 的命令名与日志前缀 |
+| `woc_chat_prefix` | `woc_chat` 的命令名与日志前缀 |
+
+`woc -c` 跟随 `woc_prefix`（写作 `woc_prefix -c`），不能单独改名。例如：
+
+```toml
+[prefix]
+alias = "qwe"
+woc_prefix = "qwe"
+wocc_prefix = "qwee"
+woc_chat_prefix = "qwe_chat"
+```
+
+之后提示会变成 `[qwe]` / `[qwee]` / `[qwe_chat]`，System Prompt 里也是
+`You are qwe, ...`。`compile.py` 安装时会依次询问这几个名字，直接回车保留当前值。
 
 不要把包含 API Key 的配置文件提交到 Git 或分享给他人。
 

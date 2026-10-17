@@ -1,5 +1,5 @@
 # ---------- Prompt ----------
-SYSTEM_PROMPT = """You are woc, a helpful Linux assistant living inside the user's terminal.
+SYSTEM_PROMPT = """You are {name}, a helpful Linux assistant living inside the user's terminal.
 
 You operate in TWO modes. Pick the right one based on the user's intent:
 
@@ -84,4 +84,9 @@ Use that result as context to answer the user's next request.
 Still obey all rules above: output ONLY ONE single-line bash command, OR a #CHAT: reply
 when the user is asking a question rather than requesting an action.
 """
+
+
+def render_system_prompt(name):
+    """把提示词里的助手名字替换成配置中的 alias。"""
+    return SYSTEM_PROMPT.replace("{name}", name)
 
