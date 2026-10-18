@@ -166,7 +166,9 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
         try:
             cmd = sanitize(body)
         except ChatResponse as chat:
-            messages.append({"role": "assistant", "content": chat.text})
+            # 历史里**保留** `#CHAT:` 标记：模型会模仿自己上一轮的回复格式，剥掉标记
+            # 会让它下一轮继续只写正文（实测 6 轮会话 11/18 vs 保留标记 18/18）。
+            messages.append({"role": "assistant", "content": "#CHAT: " + chat.text})
             return
         except CommandGenError as exc:
             eprint(f"[{alias}] {exc}", C.RED)
