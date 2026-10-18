@@ -4,7 +4,7 @@ from ..colors import C, cerr, eprint, interactive_input
 from ..config import capture_sudo, load_config, ls_on_start, prefix
 from ..context import messages_prefix
 from ..llm import LLMError
-from ..loop import SessionEnd, run_turn
+from ..loop import SessionEnd, expand_last_output, last_command, run_turn
 from ..prompts import LOOP_HINT, MULTI_TURN_HINT, render_system_prompt
 
 MAX_STEPS_LIMIT = 8
@@ -32,6 +32,7 @@ def wocc_main(argv):
         print("提问（如“解释一下”“为什么...”）会自动进入 chat 模式，不会被执行。")
         print("  --loop          允许模型用 #STEP: 续步（默认关闭）")
         print("  --capture-sudo  需要 sudo 密码时捕获输出并反馈给模型")
+        print("会话内命令: :q 退出 · :more / v 展开上一条命令的完整输出 · :last 看上一条命令")
         sys.exit(0)
 
     # 会话级稳定前缀：system prompt + 多轮说明（+loop 说明） + template 参考库 + 环境。
@@ -70,6 +71,17 @@ def wocc_main(argv):
         if user_input in (":q", "exit", "quit"):
             eprint(f"[{alias}] 会话结束", C.GREEN)
             break
+        if user_input in (":more", "v"):
+            if not expand_last_output():
+                eprint(f"[{alias}] 没有可展开的输出", C.YELLOW)
+            continue
+        if user_input == ":last":
+            command = last_command()
+            if command:
+                eprint(f"[{alias}] {command}", C.CYAN)
+            else:
+                eprint(f"[{alias}] 还没有执行过命令", C.YELLOW)
+            continue
 
         start = len(messages)
         messages.append({"role": "user", "content": user_input})

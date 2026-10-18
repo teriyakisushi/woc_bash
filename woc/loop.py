@@ -10,14 +10,14 @@
 import re
 import sys
 
-from .colors import C, cout, eprint, interactive_input
+from .colors import C, cout, eprint, interactive_input, read_key
 from .exec import (format_exec_result, format_foreground_result, needs_privilege,
                    pty_capture_available, run_command_capture,
                    run_command_capture_pty, run_command_foreground,
                    sudo_ticket_valid)
 from .llm import LLMError, StreamMode, call_llm_messages
-from .sanitize import (ChatResponse, CommandGenError, is_dangerous,
-                       is_root_shell, sanitize, strip_dsml)
+from .sanitize import (ChatResponse, CommandGenError, dangerous_reason,
+                       is_dangerous, is_root_shell, sanitize, strip_dsml)
 
 STEP_MARKER = "#STEP:"
 
@@ -36,6 +36,14 @@ READ_ONLY = frozenset({
 _UNBOUNDED = "|&;$`><()"
 
 MAX_STEPS_LIMIT = 8
+
+# 输出折叠：只折叠"成功的命令 stdout"，stderr / 失败 / 模型回答都不折。
+FOLD_LINES = 25
+FOLD_HEAD = 15
+FOLD_TAIL = 8
+
+# 上一条命令与完整输出，供 `:more` 重新展开。
+_LAST = {"command": "", "output": ""}
 
 # 中文正文出现在"命令"里，通常意味着模型漏了 #CHAT: 标记。
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
@@ -69,6 +77,57 @@ def _limits(cfg, loop_enabled):
     if not loop_enabled:
         max_steps = 1
     return max_steps, max(total_chars, 1), bool(settings.get("auto_safe"))
+
+
+def _confirm(alias):
+    """读一个确认键。Enter/y 执行，n 跳过，e 编辑。"""
+    eprint(f"[{alias}] Enter/y 执行 · n 跳过 · e 编辑 · Ctrl+C 取消", C.GREEN)
+    try:
+        key = read_key()
+    except (KeyboardInterrupt, EOFError):
+        eprint(f"\n[{alias}] 会话结束", C.GREEN)
+        raise SessionEnd()
+    key = (key or "").strip().lower()
+    if key in ("n", "s", "no", "skip"):
+        return "skip"
+    if key in ("e", "edit"):
+        return "edit"
+    return "run"
+
+
+def _print_output(out, err, code, alias):
+    """打印命令输出。stdout 过长才折叠；stderr 与失败时永远完整显示。"""
+    folded = False
+    if out:
+        lines = out.splitlines()
+        if code == 0 and len(lines) > FOLD_LINES:
+            hidden = len(lines) - FOLD_HEAD - FOLD_TAIL
+            sys.stdout.write("\n".join(lines[:FOLD_HEAD]) + "\n")
+            sys.stdout.write(f"… 已折叠 {hidden} 行（输入 :more 展开全文）\n")
+            sys.stdout.write("\n".join(lines[-FOLD_TAIL:]) + "\n")
+            folded = True
+        else:
+            sys.stdout.write(out if out.endswith("\n") else out + "\n")
+    if err:
+        sys.stderr.write(err if err.endswith("\n") else err + "\n")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    return folded
+
+
+def expand_last_output():
+    """重新打印上一条命令的完整 stdout（`:more`）。"""
+    if not _LAST["output"]:
+        return False
+    sys.stdout.write(_LAST["output"])
+    if not _LAST["output"].endswith("\n"):
+        sys.stdout.write("\n")
+    sys.stdout.flush()
+    return True
+
+
+def last_command():
+    return _LAST["command"]
 
 
 def _ask(messages, cfg, alias):
@@ -207,10 +266,11 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
 
         tier = risk_tier(cmd)
         if tier == "deny":
+            reason = dangerous_reason(cmd) or "命中安全策略"
             block = _rejected(
                 alias, cmd,
-                "检测到潜在危险命令，已拒绝：",
-                "命令因安全策略被拒绝，请换一种安全写法。",
+                f"检测到潜在危险命令（{reason}），已拒绝：",
+                f"命令因安全策略被拒绝：{reason}。请换一种安全写法。",
             )
             messages.append({"role": "user", "content": block})
             if step_mode:
@@ -226,13 +286,29 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
             eprint(f"[{alias}] [step {step}/{max_steps}]", C.CYAN)
 
         if not (tier == "safe" and auto_safe and loop_enabled):
-            eprint(f"[{alias}] 按 Enter 执行，输入 s 跳过，Ctrl+C 取消", C.GREEN)
-            try:
-                answer = interactive_input(prompt="")
-            except (KeyboardInterrupt, EOFError):
-                eprint(f"\n[{alias}] 会话结束", C.GREEN)
-                raise SessionEnd()
-            if answer.strip().lower() == "s":
+            action = _confirm(alias)
+            if action == "edit":
+                if not sys.stdin.isatty():
+                    eprint(f"[{alias}] 非交互模式下无法编辑，已跳过", C.YELLOW)
+                    action = "skip"
+                else:
+                    edited = interactive_input(prompt="", initial=cmd).strip()
+                    if not edited:
+                        action = "skip"
+                    elif edited == cmd:
+                        action = "run"
+                    else:
+                        reason = dangerous_reason(edited)
+                        if reason or is_root_shell(edited):
+                            eprint(f"[{alias}] 编辑后的命令仍被拒绝"
+                                   f"（{reason or '交互式 root shell'}）",
+                                   C.YELLOW, C.BOLD)
+                            action = "skip"
+                        else:
+                            cmd = edited
+                            messages[-1]["content"] = cmd
+                            action = "run"
+            if action == "skip":
                 eprint(f"[{alias}] 已跳过", C.YELLOW)
                 messages.append({
                     "role": "user",
@@ -247,14 +323,10 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                 return
 
         result, out, err, code, shown = _execute(cmd, alias, capture)
-        if out and not shown:
-            sys.stdout.write(out)
-            if not out.endswith("\n"):
-                sys.stdout.write("\n")
-        if err and not shown:
-            sys.stderr.write(err)
-            if not err.endswith("\n"):
-                sys.stderr.write("\n")
+        _LAST["command"] = cmd
+        _LAST["output"] = out
+        if not shown:
+            _print_output(out, err, code, alias)
         if code != 0:
             eprint(f"[{alias}] exit_code={code}", C.RED)
         if code == 127 and _CJK_RE.search(cmd):

@@ -42,10 +42,11 @@ class FakeHarness:
 
     def __enter__(self):
         self._saved = (L.call_llm_messages, L.run_command_capture,
-                       L.interactive_input, L.eprint)
+                       L.read_key, L.interactive_input, L.eprint)
         L.call_llm_messages = self.llm
         L.run_command_capture = self.capture
-        L.interactive_input = lambda prompt="": ""
+        L.read_key = lambda prompt="": ""          # 默认按 Enter 执行
+        L.interactive_input = lambda prompt="", **kw: ""
         L.eprint = self.eprint
         self._redirect = redirect_stdout(self.stdout)
         self._redirect.__enter__()
@@ -57,7 +58,7 @@ class FakeHarness:
         self._redirect_err.__exit__(*exc)
         self._redirect.__exit__(*exc)
         (L.call_llm_messages, L.run_command_capture,
-         L.interactive_input, L.eprint) = self._saved
+         L.read_key, L.interactive_input, L.eprint) = self._saved
         return False
 
     def eprint(self, text="", *styles):
@@ -280,3 +281,51 @@ class LiveChatMarkerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class OutputFoldTest(unittest.TestCase):
+    LONG = "\n".join("line %d" % i for i in range(100)) + "\n"
+
+    def test_long_output_is_folded(self):
+        cmd = "seq 100"
+        with FakeHarness([cmd], outputs={cmd: (self.LONG, "", 0)}) as harness:
+            harness.run([{"role": "user", "content": "q"}])
+        stdout = harness.stdout.getvalue()
+        self.assertIn("已折叠", stdout)
+        self.assertIn("line 0", stdout)
+        self.assertIn("line 99", stdout)
+        self.assertNotIn("line 50", stdout)
+
+    def test_short_output_not_folded(self):
+        cmd = "ls"
+        with FakeHarness([cmd], outputs={cmd: ("a\nb\n", "", 0)}) as harness:
+            harness.run([{"role": "user", "content": "q"}])
+        self.assertNotIn("已折叠", harness.stdout.getvalue())
+
+    def test_failed_command_never_folded(self):
+        cmd = "cat missing"
+        with FakeHarness([cmd], outputs={cmd: (self.LONG, "boom\n", 1)}) as harness:
+            harness.run([{"role": "user", "content": "q"}])
+        self.assertNotIn("已折叠", harness.stdout.getvalue())
+
+    def test_expand_last_output(self):
+        cmd = "seq 100"
+        with FakeHarness([cmd], outputs={cmd: (self.LONG, "", 0)}) as harness:
+            harness.run([{"role": "user", "content": "q"}])
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            self.assertTrue(L.expand_last_output())
+        self.assertIn("line 50", buffer.getvalue())
+        self.assertEqual(L.last_command(), cmd)
+
+
+class DenyReasonTest(unittest.TestCase):
+    def test_reason_is_reported(self):
+        with FakeHarness(["rm -rf /"]) as harness:
+            harness.run([{"role": "user", "content": "q"}])
+        self.assertIn("递归删除根目录", harness.stderr.getvalue())
+
+    def test_reason_goes_back_to_model(self):
+        with FakeHarness(["mkfs.ext4 /dev/sda1"]) as harness:
+            messages = harness.run([{"role": "user", "content": "q"}])
+        self.assertIn("格式化文件系统", messages[2]["content"])

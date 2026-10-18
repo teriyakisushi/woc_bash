@@ -152,16 +152,24 @@ def is_root_shell(cmd):
 
 
 DANGEROUS_PATTERNS = [
-    r"\brm\s+-rf\s+/(\s|$)",
-    r"\bmkfs\b",
-    r"\bdd\s+.*of=/dev/[sh]d",
-    r":\(\)\s*\{.*\};\s*:",   # fork bomb
-    r"\bchmod\s+-R\s+777\s+/(\s|$)",
-    r">\s*/dev/[sh]d",
-    r"\b(shutdown|reboot|halt|poweroff)\b",
+    (r"\brm\s+-rf\s+/(\s|$)", "递归删除根目录"),
+    (r"\bmkfs\b", "格式化文件系统"),
+    (r"\bdd\s+.*of=/dev/[sh]d", "直接写块设备"),
+    (r":\(\)\s*\{.*\};\s*:", "fork 炸弹"),
+    (r"\bchmod\s+-R\s+777\s+/(\s|$)", "把根目录权限改成 777"),
+    (r">\s*/dev/[sh]d", "直接写块设备"),
+    (r"\b(shutdown|reboot|halt|poweroff)\b", "关机 / 重启"),
 ]
 
 
+def dangerous_reason(cmd):
+    """返回命中的危险规则说明；安全命令返回 None。"""
+    for pattern, label in DANGEROUS_PATTERNS:
+        if re.search(pattern, cmd):
+            return label
+    return None
+
+
 def is_dangerous(cmd):
-    return any(re.search(p, cmd) for p in DANGEROUS_PATTERNS)
+    return dangerous_reason(cmd) is not None
 

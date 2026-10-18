@@ -307,6 +307,17 @@ wocc
 ```
 
 输入 `:q`、`exit` 或 `quit` 退出。命令执行结果会自动加入下一轮上下文。
+
+命令生成后：
+
+- `Enter` / `y` —— 执行
+- `n` —— 跳过（不执行，把"用户跳过"反馈给模型）
+- `e` —— 编辑这条命令（改完回车执行，会重新过一遍危险检查）
+- `Ctrl+C` —— 结束会话
+
+输出很长时只折叠显示前 15 + 后 8 行；`stderr` 和失败的命令永远完整显示。
+输入 `:more`（或 `v`）展开上一条命令的完整输出，`:last` 重看上一条命令。
+编辑器里按 `Ctrl+G` 可以把当前输入完整打到上方（长输入被横向滚动时很有用）。
 也可以把首轮输入直接放在命令后：
 
 ```bash
@@ -376,4 +387,7 @@ python3 -m unittest discover -s tests  # 离线回归测试（loop / risk_tier /
 ```bash
 WOC_LIVE_TEST=1 python3 -m unittest discover -s tests
 ```
+
+CI 在 GitHub Actions 上用 Python 3.10 / 3.13 跑同样的两项检查
+（见 `.github/workflows/test.yml`）。
 

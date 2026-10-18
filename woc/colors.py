@@ -60,8 +60,11 @@ def _visible_width(text):
     return _display_width(_ANSI_ESCAPE.sub("", text))
 
 
-def interactive_input(prompt, stream=sys.stderr):
-    """Read a line while keeping the fixed prompt outside editable input."""
+def interactive_input(prompt, stream=sys.stderr, initial=""):
+    """Read a line while keeping the fixed prompt outside editable input.
+
+    initial 预填一段文本（用于 `e` 编辑已生成的命令）；管道输入时忽略。
+    """
     if not prompt.startswith("\n"):
         prompt = "\n" + prompt
 
@@ -88,8 +91,8 @@ def interactive_input(prompt, stream=sys.stderr):
     decoder = codecs.getincrementaldecoder(stdin.encoding or "utf-8")(
         errors="replace"
     )
-    text = []
-    cursor = 0
+    text = list(initial)
+    cursor = len(text)
     escape = 0
     escape_buffer = bytearray()
     columns = max(shutil.get_terminal_size((80, 24)).columns, 8)
@@ -103,7 +106,13 @@ def interactive_input(prompt, stream=sys.stderr):
         end = cursor
         while end < len(text) and _display_width("".join(text[start:end + 1])) <= available:
             end += 1
-        visible = "".join(text[start:end])
+        chars = text[start:end]
+        # 单行窗口装不下时，用 < > 标出"两边还有内容"（只占 1 列，不破坏对齐）。
+        if chars and start > 0:
+            chars[0] = "<"
+        if chars and end < len(text):
+            chars[-1] = ">"
+        visible = "".join(chars)
         suffix_width = _display_width("".join(text[cursor:end]))
         stream.write("\r" + redraw_prompt + visible + "\x1b[K")
         if suffix_width:
@@ -116,6 +125,10 @@ def interactive_input(prompt, stream=sys.stderr):
             char = os.read(fd, 1)
             if not char:
                 raise EOFError
+            if char == b"\x07":  # Ctrl+G：把完整输入打到上面，方便看被滚掉的前文
+                stream.write("\r\n" + "".join(text) + "\r\n")
+                redraw()
+                continue
             if char in (b"\r", b"\n"):
                 stream.write("\n")
                 stream.flush()
@@ -165,6 +178,31 @@ def interactive_input(prompt, stream=sys.stderr):
             redraw()
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def read_key(prompt="", stream=sys.stderr):
+    """读一个按键（tty）或一行（管道），返回小写字符串；Enter 返回空串。"""
+    if not sys.stdin.isatty():
+        try:
+            return input(prompt).strip().lower()
+        except EOFError:
+            return ""
+    stream.write(prompt)
+    stream.flush()
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        data = os.read(fd, 1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    if not data:
+        raise EOFError
+    if data == b"\x03":
+        raise KeyboardInterrupt
+    if data in (b"\r", b"\n"):
+        return ""
+    return data.decode("utf-8", "replace").lower()
 
 
 def eprint(text="", *styles):
