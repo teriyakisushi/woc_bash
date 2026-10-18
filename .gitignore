@@ -12,3 +12,6 @@ woc
 .vscode/
 .idea/
 *.swp
+
+# 本地交接文档（不入库）
+HANDOFF*.md
