@@ -23,6 +23,14 @@ ENV_KEYS = {
 # 单次回复的最大 token 数
 DEFAULT_OUTPUT_MAXTOKENS = 4096
 
+# [loop] 的默认值：默认关闭；只读命令默认仍要人工确认。
+LOOP_DEFAULTS = {
+    "enabled": False,
+    "max_steps": 5,
+    "total_chars": 24000,
+    "auto_safe": False,
+}
+
 
 def _to_bool(value):
     return str(value).strip().lower() not in ("", "0", "false", "no", "off")
@@ -116,6 +124,14 @@ def load_config(path=None):
         "prefix": dict(PREFIX_DEFAULTS),
         "sudo": {"capture_output": _env_bool("WOC_CAPTURE_SUDO", False)},
         "context": {"ls_on_start": _env_bool("WOC_CONTEXT_LS", False)},
+        "loop": {
+            "enabled": _env_bool("WOC_LOOP", LOOP_DEFAULTS["enabled"]),
+            "max_steps": _env_positive_int(
+                "WOC_LOOP_MAX_STEPS", LOOP_DEFAULTS["max_steps"], notes),
+            "total_chars": _env_positive_int(
+                "WOC_LOOP_TOTAL_CHARS", LOOP_DEFAULTS["total_chars"], notes),
+            "auto_safe": _env_bool("WOC_LOOP_AUTO_SAFE", LOOP_DEFAULTS["auto_safe"]),
+        },
     }
 
     path = path or default_config_path()
@@ -147,6 +163,18 @@ def load_config(path=None):
                 if section == "context":
                     if key == "ls_on_start" and "WOC_CONTEXT_LS" not in os.environ:
                         cfg["context"]["ls_on_start"] = _to_bool(value)
+                    continue
+                if section == "loop":
+                    if key == "enabled" and "WOC_LOOP" not in os.environ:
+                        cfg["loop"]["enabled"] = _to_bool(value)
+                    elif key == "auto_safe" and "WOC_LOOP_AUTO_SAFE" not in os.environ:
+                        cfg["loop"]["auto_safe"] = _to_bool(value)
+                    elif key == "max_steps" and "WOC_LOOP_MAX_STEPS" not in os.environ:
+                        cfg["loop"]["max_steps"] = _file_positive_int(
+                            value, LOOP_DEFAULTS["max_steps"], notes, "loop.max_steps")
+                    elif key == "total_chars" and "WOC_LOOP_TOTAL_CHARS" not in os.environ:
+                        cfg["loop"]["total_chars"] = _file_positive_int(
+                            value, LOOP_DEFAULTS["total_chars"], notes, "loop.total_chars")
                     continue
                 if section:
                     continue

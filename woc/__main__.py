@@ -2,7 +2,6 @@ import os
 import sys
 
 from .cli.chat import woc_chat_main
-from .cli.multi import wocc_main
 from .cli.single import woc_main
 from .config import load_config, prefix
 from .context import (BODY_BUDGET, install_templates, lint_templates,
@@ -127,6 +126,8 @@ def main():
     prog = os.path.basename(sys.argv[0])
     argv = sys.argv[1:]
     if prog == "wocc":
+        # 延迟导入：单轮 woc 不需要 loop / 多轮模块，保持启动路径不变。
+        from .cli.multi import wocc_main
         wocc_main(argv)
     elif argv and argv[0] in ("-c", "--chat"):
         woc_chat_main(argv[1:], name=_COMMAND, via_woc=True)

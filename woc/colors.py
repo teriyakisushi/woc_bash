@@ -69,7 +69,12 @@ def interactive_input(prompt, stream=sys.stderr):
     if not stdin.isatty():
         reconfigure = getattr(stdin, "reconfigure", None)
         if reconfigure is not None:
-            reconfigure(errors="replace")
+            # 管道输入时第二次进入会抛 UnsupportedOperation（读到一半不能再改编码），
+            # 这里只是尽力让非法字节不炸，失败了照常读。
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
         return input(prompt)
 
     # GNU readline can count a CJK character as two separate erase units.

@@ -31,12 +31,25 @@ class StreamMode:
 
 class StreamFilter:
     CHAT_MARKER = "#CHAT:"
+    STEP_MARKER = "#STEP:"
+    # 标记 -> 流式显示模式；#STEP: 仍然是一条命令，所以用 COMMAND（青色）。
+    _MARKERS = ((CHAT_MARKER, StreamMode.CHAT), (STEP_MARKER, StreamMode.COMMAND))
 
     def __init__(self):
         self.buf = ""
         self.mode = StreamMode.UNDECIDED
         self.acc = ""
         self.emitted = ""
+
+    def _classify(self, stripped):
+        """None=不是标记，("wait", None)=还可能是标记前缀，(marker, mode)=命中。"""
+        for marker, mode in self._MARKERS:
+            if stripped.startswith(marker):
+                return marker, mode
+        for marker, _mode in self._MARKERS:
+            if marker.startswith(stripped):
+                return "wait", None
+        return None, None
 
     def feed(self, chunk):
         if not chunk:
@@ -46,16 +59,17 @@ class StreamFilter:
         if self.mode == StreamMode.UNDECIDED:
             self.buf += chunk
             stripped = self.buf.lstrip()
+            marker, mode = self._classify(stripped)
 
-            if stripped.startswith(self.CHAT_MARKER):
-                rest = stripped[len(self.CHAT_MARKER):]
-                self.mode = StreamMode.CHAT
+            if marker == "wait":
+                return ""
+
+            if marker is not None:
+                rest = stripped[len(marker):]
+                self.mode = mode
                 self.emitted += rest
                 self.buf = ""
                 return rest
-
-            if len(stripped) < len(self.CHAT_MARKER) and self.CHAT_MARKER.startswith(stripped):
-                return ""
 
             self.mode = StreamMode.COMMAND
             out = self.buf
@@ -68,9 +82,11 @@ class StreamFilter:
 
     def finish(self):
         if self.mode == StreamMode.UNDECIDED:
-            if self.buf.lstrip().startswith(self.CHAT_MARKER):
-                self.mode = StreamMode.CHAT
-                rest = self.buf.lstrip()[len(self.CHAT_MARKER):]
+            stripped = self.buf.lstrip()
+            marker, mode = self._classify(stripped)
+            if marker is not None and marker != "wait":
+                rest = stripped[len(marker):]
+                self.mode = mode
                 self.emitted += rest
                 self.buf = ""
                 return rest

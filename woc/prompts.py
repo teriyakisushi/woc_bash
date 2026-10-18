@@ -90,3 +90,19 @@ def render_system_prompt(name):
     """把提示词里的助手名字替换成配置中的 alias。"""
     return SYSTEM_PROMPT.replace("{name}", name)
 
+LOOP_HINT = """
+AGENTIC LOOP (enabled for this session): you may take several steps, one command per step.
+
+Default behaviour is unchanged: a plain command ends the turn. If — and only if — the next
+step genuinely depends on this command's real output (for example "find the largest file,
+then read it"), prefix the command with `#STEP: ` so the harness runs it and comes back:
+
+  #STEP: f=$(find . -type f -printf '%s %p\\n' | sort -rn | head -n1 | cut -d' ' -f2-); echo "$f"; cat "$f"
+
+Rules:
+1. Use `#STEP:` only when a single command cannot answer the request.
+2. After a `#STEP:` result comes back, either send another `#STEP:` or finish with a
+   `#CHAT:` reply that answers the user.
+3. A plain command (no marker) still ends the turn. Never emit more than one command per
+   reply, never plan out loud, and never ask the user for permission.
+"""

@@ -58,6 +58,7 @@ export WOC_TIMEOUT="30"
 export WOC_OUTPUT_MAXTOKENS="4096"
 export WOC_CAPTURE_SUDO="1"   # 等价于 [sudo] capture_output = true
 export WOC_CONTEXT_LS="1"     # 等价于 [context] ls_on_start = true
+export WOC_LOOP="1"           # 等价于 [loop] enabled = true
 ```
 
 ### 配置文件
@@ -82,6 +83,12 @@ capture_output = false
 
 [context]
 ls_on_start = false
+
+[loop]
+enabled = false
+max_steps = 5
+total_chars = 24000
+auto_safe = false
 ```
 
 环境变量优先于配置文件。默认 API Base 是
@@ -139,6 +146,30 @@ wocc --capture-sudo
 
 快照可能过期，注入文本里已明确要求模型不要硬编码文件名、需要准确结果时重新生成命令；
 输出最多 200 行 / 4000 字符，超出会标注「已截断」。对应环境变量 `WOC_CONTEXT_LS=1`。
+
+### Agentic loop（`[loop]`）
+
+默认关闭。开启后，`wocc` 允许模型在**一个回合内**多走几步：模型只要在命令前加上
+`#STEP: `，就会执行并把结果喂回去，直到它用 `#CHAT:` 给出结论，或到达步数/预算上限。
+
+```bash
+wocc --loop        # 只对本次会话生效
+```
+
+```toml
+[loop]
+enabled = false        # 等价于 --loop / WOC_LOOP=1
+max_steps = 5          # 单回合最多几步（硬上限 8）
+total_chars = 24000    # 单回合累计输出预算
+auto_safe = false      # 只读单命令是否免确认
+```
+
+- 不带 `#STEP:` 的普通命令**行为完全不变**：执行完就结束回合，不会多发一次请求。
+- `auto_safe=false`（默认）时每一步仍要按 Enter；设为 `true` 只让
+  `ls`、`cat`、`grep`、`wc` 这类**只读单命令**自动执行。带管道、重定向、`$(...)`、
+  `;` 的命令一律仍需确认；`find`、`sort`、`awk`、`sed` 不在白名单里
+  （分别可 `-exec`、`-o` 写盘、执行命令）。
+- 每步回显 `[step i/N]`；到步数或累计输出上限会明确提示，不会静默停止。
 
 不要把包含 API Key 的配置文件提交到 Git 或分享给他人。
 
@@ -282,6 +313,12 @@ wocc
 wocc 帮我看看当前运行中的进程
 ```
 
+需要模型连做多步（后一步依赖前一步的真实输出）时加 `--loop`：
+
+```bash
+wocc --loop
+```
+
 ### 聊天模式
 
 ```bash
@@ -299,6 +336,9 @@ LLM 输出不应被视为绝对可信。执行命令前请检查命令内容、�
 
 项目内置了一组高风险命令拦截规则，但这不是完整的安全沙箱。请在拥有
 重要数据的环境中谨慎使用，并在需要时先备份数据。
+
+`--loop` 会把"每条命令都要人工确认"的边界下移：默认每一步仍需确认，只有
+`auto_safe=true` 时"只读单命令"才免确认；步数、累计输出都有硬上限，越界会明确提示。
 
 ### sudo 与权限
 
