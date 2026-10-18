@@ -366,9 +366,14 @@ python3 compile.py --uninstall --purge-config
 
 ## 开发检查
 
-运行 Python 语法检查：
+```bash
+python3 -m compileall -q woc           # 语法
+python3 -m unittest discover -s tests  # 离线回归测试（loop / risk_tier / 标记历史）
+```
+
+真实 API 的 `#CHAT:` 标记合规测试**默认跳过**，需要显式开启（会调用模型、产生费用）：
 
 ```bash
-python3 -m compileall -q woc
+WOC_LIVE_TEST=1 python3 -m unittest discover -s tests
 ```
 

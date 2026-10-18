@@ -7,6 +7,7 @@
 3. 只从 wocc 路径导入，单轮 `woc` 的模块图与启动开销不受影响。
 """
 
+import re
 import sys
 
 from .colors import C, cout, eprint, interactive_input
@@ -35,6 +36,9 @@ READ_ONLY = frozenset({
 _UNBOUNDED = "|&;$`><()"
 
 MAX_STEPS_LIMIT = 8
+
+# 中文正文出现在"命令"里，通常意味着模型漏了 #CHAT: 标记。
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 
 
 class SessionEnd(Exception):
@@ -253,6 +257,11 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                 sys.stderr.write("\n")
         if code != 0:
             eprint(f"[{alias}] exit_code={code}", C.RED)
+        if code == 127 and _CJK_RE.search(cmd):
+            # 可观测性：模型偶尔会忘记 #CHAT:，把一段中文回答当成命令。这里不改行为，
+            # 只在终端提示一句，方便下次回归时立刻发现（历史格式见 run_turn 的注释）。
+            eprint(f"[{alias}] ⚠️  这条“命令”更像是一段回答（exit 127 且含中文），"
+                   "可能是模型漏了 #CHAT: 标记。", C.YELLOW)
 
         messages.append({"role": "user", "content": result})
         spent += len(result)
