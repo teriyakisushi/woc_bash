@@ -34,6 +34,12 @@ def wocc_main(argv):
         print("会话内命令: :q 退出 · :more / v 展开上一条命令的完整输出 · :last 看上一条命令")
         sys.exit(0)
 
+    if not sys.stdin.isatty():
+        # 非终端时 read_key() 会退化成 input()，管道里的任意一行都会变成“确认”。
+        eprint(f"[{alias}] {name} 需要终端：当前标准输入不是终端，"
+               "无法逐条确认命令，已退出。", C.RED)
+        sys.exit(2)
+
     # 会话级稳定前缀：system prompt + 多轮说明（+loop 说明） + template 参考库 + 环境。
     # 只在开始时构造一次，因此每轮请求的前缀逐字节相同 —— 前缀缓存能持续命中。
     hint = MULTI_TURN_HINT + "\n" + LOOP_HINT if loop_enabled else MULTI_TURN_HINT

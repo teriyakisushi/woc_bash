@@ -29,6 +29,12 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
         print("进入支持 Markdown 渲染的多轮聊天。输入 :q / exit / quit 退出。")
         raise SystemExit(0)
 
+    one_shot = bool(argv) and not sys.stdin.isatty()
+    if not sys.stdin.isatty() and not argv:
+        # 非终端时交互输入会退化成 input()，管道内容会被当成下一轮问题。
+        eprint(f"[{alias}] 聊天模式需要终端：当前标准输入不是终端，已退出。", C.RED)
+        raise SystemExit(2)
+
     cwd = os.getcwd()
     messages = [
         {"role": "system", "content": CHAT_SYSTEM_PROMPT.replace("{name}", alias)},
@@ -85,6 +91,8 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
         print(render_markdown(answer, colors))
         print()
         messages.append({"role": "assistant", "content": answer})
+        if one_shot:
+            return
 
 
 if __name__ == "__main__":
