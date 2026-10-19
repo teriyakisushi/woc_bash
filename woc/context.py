@@ -715,7 +715,7 @@ def lint_templates(templates):
     """模板自检：返回 (errors, warnings)，均为 [(template_id, message), ...]。
 
     重点抓两类问题：
-    - 参考命令会被 `sanitize` 截断（多行）或被 `is_dangerous` 拦截（子串误报）；
+    - 参考命令会被 `sanitize` 截断（多行）或被 `is_dangerous` 拦截（安全策略）；
     - 已知的可移植性坑。
     """
     from .sanitize import is_assignment_only, is_dangerous
@@ -749,7 +749,7 @@ def lint_templates(templates):
                 if is_dangerous(line):
                     errors.append((
                         tpl.id,
-                        f"参考命令会被 is_dangerous 拦截（子串匹配误报）: {line[:70]}",
+                        f"参考命令会被 is_dangerous 拦截（命令位置规则）: {line[:70]}",
                     ))
                 for pattern, note in PORTABILITY_NOTES:
                     if pattern.search(line):

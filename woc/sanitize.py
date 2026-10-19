@@ -1,6 +1,8 @@
 import re
 
 from .llm import clean_text
+# 危险命令判定在 gate.py；这里 re-export，保持现有调用方不变。
+from .gate import dangerous_reason, is_dangerous
 
 # LLM TEXT FILTER
 FENCE_LINE_RE = re.compile(r"^```[a-zA-Z0-9_-]*\s*$|^```\s*$")
@@ -21,6 +23,21 @@ _DSML_LOOSE_RE = re.compile(
 )
 # 最坏情况：连尖括号都没有
 _DSML_BARE_RE = re.compile(_DSML_BARS + r"\s*DSML\s*" + _DSML_BARS)
+
+# 工具调用/标签残留：模型偶尔会把 <exec_result> 当工具来调用。
+# 这些不是命令，绝不能把里面的 placeholder 当命令行执行。
+_TOOLCALL_RE = re.compile(
+    r"(?:\|\|\s*DSML\s*\|\||｜｜\s*DSML\s*｜｜"
+    r"|</?exec_result\b|<exec_result\b"
+    r"|</?function_calls?\b|<invoke\b|</?tool_calls?\b)"
+)
+# 整行就是一个 XML 标签（例如 </br>、</exec_result>），不是命令。
+_TAG_LINE_RE = re.compile(r"^</?[A-Za-z][A-Za-z0-9_.:-]*(?:\s[^>]*)?>$")
+
+
+def has_toolcall(text):
+    """原始模型输出里是否含工具调用/标签残留（在 strip_dsml 之前检查）。"""
+    return bool(text and _TOOLCALL_RE.search(text))
 
 
 def strip_dsml(text):
@@ -99,6 +116,12 @@ def sanitize(raw):
         content = text.lstrip()[len(CHAT_MARKER):].strip()
         raise ChatResponse(content)
 
+    # 工具调用残留不是命令：宁可报错让模型重写，也不能执行 placeholder。
+    if _TOOLCALL_RE.search(raw) or _TOOLCALL_RE.search(text):
+        raise CommandGenError(
+            "模型输出了工具调用/标签格式，已拒绝执行；"
+            "请只返回一条命令，或 #CHAT: 回答")
+
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     # 排除围栏行后剩下的内容行 —— 用于判断"是不是还有后续行被丢掉了"
     body_indexes = [i for i, l in enumerate(lines) if not FENCE_LINE_RE.match(l)]
@@ -107,6 +130,9 @@ def sanitize(raw):
     for index, line in enumerate(lines):
         if FENCE_LINE_RE.match(line):
             continue
+        if _TAG_LINE_RE.match(line):
+            raise CommandGenError(
+                "模型输出了 XML/标签行，已拒绝执行；请只返回一条命令")
         if line.startswith(CHAT_MARKER):
             raise ChatResponse(line[len(CHAT_MARKER):].strip())
         if line.startswith("#ERROR"):
@@ -149,19 +175,3 @@ ROOT_SHELL_PATTERNS = [
 
 def is_root_shell(cmd):
     return any(re.search(p, cmd) for p in ROOT_SHELL_PATTERNS)
-
-
-DANGEROUS_PATTERNS = [
-    r"\brm\s+-rf\s+/(\s|$)",
-    r"\bmkfs\b",
-    r"\bdd\s+.*of=/dev/[sh]d",
-    r":\(\)\s*\{.*\};\s*:",   # fork bomb
-    r"\bchmod\s+-R\s+777\s+/(\s|$)",
-    r">\s*/dev/[sh]d",
-    r"\b(shutdown|reboot|halt|poweroff)\b",
-]
-
-
-def is_dangerous(cmd):
-    return any(re.search(p, cmd) for p in DANGEROUS_PATTERNS)
-
