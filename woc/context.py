@@ -32,6 +32,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import debug
+
 # 索引层：模板数上限（超过就只保留前 N 个的索引，防极端情况撑爆上下文）
 INDEX_LIMIT = 100
 # 正文层：注入正文的字符预算。模板少时等于全量，多时自动收敛。
@@ -532,6 +534,12 @@ def stable_context(query="", cwd=None, templates=None, warn=None, detail=None):
         return ""
     index = select_index(templates)
     bodies, strategy, scores = select_bodies(templates, query=query)
+    if debug.enabled():
+        debug.log(
+            "templates: %d total, strategy=%s, bodies=%d, index=%d chars, body=%d chars"
+            % (len(templates), strategy, len(bodies),
+               len(render_index(index)),
+               sum(len(t.as_unit()) for t in bodies)))
     if detail is not None:
         detail.update(
             total=len(templates),

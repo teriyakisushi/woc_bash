@@ -248,8 +248,9 @@ class ConfigTest(unittest.TestCase):
         from woc.config import pipe_enabled, pipe_max_chars
         self.assertTrue(pipe_enabled({}))
         self.assertEqual(pipe_max_chars({}), 32000)
+        # 显式值也要被预算夹住：默认 max_input_chars 就是 32000
         self.assertEqual(
-            pipe_max_chars({"pipe": {"max_chars": 10 ** 9}}), 120000)
+            pipe_max_chars({"pipe": {"max_chars": 10 ** 9}}), 32000)
         self.assertEqual(
             pipe_max_chars({"pipe": {"max_chars": "bad"}}), 32000)
 

@@ -1,6 +1,8 @@
 import os
 import sys
 
+from . import budget, debug
+
 # [prefix] 段的默认值。alias 用于日志/提示与 System Prompt；
 # woc_prefix / wocc_prefix / woc_chat_prefix 是安装后的命令名。
 # 注意：`woc -c` 跟随 woc_prefix，不能单独改名。
@@ -20,8 +22,8 @@ ENV_KEYS = {
     "output_maxtokens": "WOC_OUTPUT_MAXTOKENS",
 }
 
-# 单次回复的最大 token 数
-DEFAULT_OUTPUT_MAXTOKENS = 4096
+# 单次回复的最大 token 数（统一默认值在 budget 模块，这里保留旧名字）
+DEFAULT_OUTPUT_MAXTOKENS = budget.MAX_OUTPUT_TOKENS
 
 # [loop] 的默认值：默认关闭；只读命令默认仍要人工确认。
 LOOP_DEFAULTS = {
@@ -38,11 +40,11 @@ EXEC_DEFAULTS = {"syntax_check": True}
 UI_DEFAULTS = {"spinner": True}
 
 # [pipe] 段：标准输入不是终端时，把 stdin 当数据问答（只回答、不执行命令）。
-PIPE_DEFAULTS = {"enabled": True, "max_chars": 32000}
+# max_chars 默认 None：不单独配置时跟随 [budget] max_input_chars。
+PIPE_DEFAULTS = {"enabled": True, "max_chars": None}
 
-# 单次送入模型的字符上限。120000 字符约 30k-40k tokens，已占掉模型上下文的大半；
-# 这是防误配的绝对上限，不是产品推荐值。
-PIPE_MAX_CHARS_LIMIT = 120000
+# [debug] 段：把 usage、前缀规模、输入规模等观测信息打到 stderr。
+DEBUG_DEFAULTS = {"enabled": False}
 
 
 def _to_bool(value):
@@ -76,6 +78,22 @@ def _env_positive_int(name, default, notes):
     if value <= 0:
         notes.append(f"环境变量 {name}={value!r} 必须大于 0，已忽略")
         return default
+    return value
+
+
+def _env_optional_positive_int(name, notes):
+    """环境变量没设时返回 None（用于"跟随其他配置"的键）。"""
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        notes.append(f"环境变量 {name}={raw!r} 非法，已忽略")
+        return None
+    if value <= 0:
+        notes.append(f"环境变量 {name}={value!r} 必须大于 0，已忽略")
+        return None
     return value
 
 
@@ -123,14 +141,24 @@ def pipe_enabled(cfg):
     return bool((cfg.get("pipe") or {}).get("enabled", PIPE_DEFAULTS["enabled"]))
 
 
-def pipe_max_chars(cfg):
-    """管道模式单次送入模型的最大字符数（[pipe] max_chars）。"""
+def pipe_max_chars(cfg, reserved_chars=0):
+    """管道模式单次送入模型的最大字符数。
+
+    显式的 [pipe] max_chars 优先，但仍要被上下文预算夹住 —— 否则用户把输入
+    上限调到 100 万，请求会直接撞模型窗口。没配时直接用 [budget]。
+    """
     settings = cfg.get("pipe") or {}
+    limit = budget.input_char_limit(cfg, reserved_chars)
+    explicit = settings.get("max_chars")
+    if explicit is None:
+        return limit
     try:
-        value = int(settings.get("max_chars", PIPE_DEFAULTS["max_chars"]))
+        value = int(explicit)
     except (TypeError, ValueError):
-        value = PIPE_DEFAULTS["max_chars"]
-    return min(max(value, 1), PIPE_MAX_CHARS_LIMIT)
+        return limit
+    if value <= 0:
+        return limit
+    return min(value, limit)
 
 
 def load_config(path=None):
@@ -143,7 +171,7 @@ def load_config(path=None):
         wocc_prefix = "qwee"
         woc_chat_prefix = "qwe_chat"
 
-    以及 [sudo] / [context] / [exec] / [ui] / [pipe] 段：
+    以及 [sudo] / [context] / [exec] / [ui] / [pipe] / [budget] / [debug] 段：
         [sudo]
         capture_output = false
 
@@ -158,18 +186,42 @@ def load_config(path=None):
 
         [pipe]
         enabled = true
-        max_chars = 32000
+        max_chars = 32000        # 可选：默认跟随 budget.max_input_chars
 
-    根级 output_maxtokens 控制单次回复的最大 token 数（默认 4096）。
+        [budget]
+        context_tokens = 64000
+        max_output_tokens = 4096
+        max_input_chars = 32000
+
+        [debug]
+        enabled = false
+
+    根级 output_maxtokens 是 [budget] max_output_tokens 的旧名字，仍然可用。
     """
     notes = []
+    # 回复上限：新键优先，兼容旧的 WOC_OUTPUT_MAXTOKENS。
+    output_env = None
+    for env_name in ("WOC_MAX_OUTPUT_TOKENS", "WOC_OUTPUT_MAXTOKENS"):
+        if env_name in os.environ:
+            output_env = _env_positive_int(
+                env_name, DEFAULT_OUTPUT_MAXTOKENS, notes)
+            break
     cfg = {
         "api_base": os.environ.get("WOC_API_BASE", "https://api.deepseek.com"),
         "api_key": os.environ.get("WOC_API_KEY", ""),
         "model": os.environ.get("WOC_MODEL", "deepseek-flash"),
         "timeout": _env_int("WOC_TIMEOUT", 30, notes),
-        "output_maxtokens": _env_positive_int(
-            "WOC_OUTPUT_MAXTOKENS", DEFAULT_OUTPUT_MAXTOKENS, notes),
+        "budget": {
+            "context_tokens": _env_positive_int(
+                "WOC_CONTEXT_TOKENS", budget.CONTEXT_TOKENS, notes),
+            "max_output_tokens": (output_env if output_env is not None
+                                  else budget.MAX_OUTPUT_TOKENS),
+            "max_input_chars": _env_positive_int(
+                "WOC_MAX_INPUT_CHARS", budget.MAX_INPUT_CHARS, notes),
+        },
+        "debug": {
+            "enabled": _env_bool("WOC_DEBUG", DEBUG_DEFAULTS["enabled"]),
+        },
         "prefix": dict(PREFIX_DEFAULTS),
         "sudo": {"capture_output": _env_bool("WOC_CAPTURE_SUDO", False)},
         "context": {"ls_on_start": _env_bool("WOC_CONTEXT_LS", False)},
@@ -190,8 +242,8 @@ def load_config(path=None):
         },
         "pipe": {
             "enabled": _env_bool("WOC_PIPE", PIPE_DEFAULTS["enabled"]),
-            "max_chars": _env_positive_int(
-                "WOC_PIPE_MAX_CHARS", PIPE_DEFAULTS["max_chars"], notes),
+            "max_chars": _env_optional_positive_int(
+                "WOC_PIPE_MAX_CHARS", notes),
         },
     }
 
@@ -245,6 +297,27 @@ def load_config(path=None):
                     if key == "spinner" and "WOC_SPINNER" not in os.environ:
                         cfg["ui"]["spinner"] = _to_bool(value)
                     continue
+                if section == "budget":
+                    if (key == "context_tokens"
+                            and "WOC_CONTEXT_TOKENS" not in os.environ):
+                        cfg["budget"]["context_tokens"] = _file_positive_int(
+                            value, budget.CONTEXT_TOKENS, notes,
+                            "budget.context_tokens")
+                    elif (key == "max_output_tokens"
+                          and output_env is None):
+                        cfg["budget"]["max_output_tokens"] = _file_positive_int(
+                            value, budget.MAX_OUTPUT_TOKENS, notes,
+                            "budget.max_output_tokens")
+                    elif (key == "max_input_chars"
+                          and "WOC_MAX_INPUT_CHARS" not in os.environ):
+                        cfg["budget"]["max_input_chars"] = _file_positive_int(
+                            value, budget.MAX_INPUT_CHARS, notes,
+                            "budget.max_input_chars")
+                    continue
+                if section == "debug":
+                    if key == "enabled" and "WOC_DEBUG" not in os.environ:
+                        cfg["debug"]["enabled"] = _to_bool(value)
+                    continue
                 if section == "pipe":
                     if key == "enabled" and "WOC_PIPE" not in os.environ:
                         cfg["pipe"]["enabled"] = _to_bool(value)
@@ -264,14 +337,19 @@ def load_config(path=None):
                     except ValueError:
                         notes.append(f"配置项 timeout 非法: {value!r}，已忽略")
                 elif key == "output_maxtokens":
-                    cfg[key] = _file_positive_int(
-                        value, DEFAULT_OUTPUT_MAXTOKENS, notes, key)
+                    if output_env is None:
+                        cfg["budget"]["max_output_tokens"] = _file_positive_int(
+                            value, DEFAULT_OUTPUT_MAXTOKENS, notes, key)
                 elif key in cfg:
                     cfg[key] = value
     except FileNotFoundError:
         pass
     except OSError as exc:
         notes.append(f"读取配置失败: {exc}")
+
+    # 旧读取方（llm.py 之前）仍然能拿到这个键。
+    cfg["output_maxtokens"] = cfg["budget"]["max_output_tokens"]
+    debug.configure(cfg)
 
     for note in notes:
         print(f"[{prefix(cfg, 'alias')}] {note}", file=sys.stderr)

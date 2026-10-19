@@ -1,8 +1,10 @@
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 
+from . import budget, debug
 from .config import load_config
 from .context import build_messages
 from .prompts import SYSTEM_PROMPT
@@ -109,12 +111,21 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
             m["content"] = clean_text(c)
 
     url = cfg["api_base"].rstrip("/") + "/chat/completions"
+    if debug.enabled():
+        total_chars = sum(len(str(m.get("content") or "")) for m in messages)
+        debug.log("request: model=%s messages=%d chars=%d max_tokens=%d timeout=%ss"
+                  % (cfg["model"], len(messages), total_chars,
+                     budget.output_tokens(cfg), cfg["timeout"]))
+        debug.log(budget.describe(cfg))
     payload = {
         "model": cfg["model"],
         "messages": messages,
         "temperature": 0,
-        "max_tokens": cfg.get("output_maxtokens", 4096),
+        "max_tokens": budget.output_tokens(cfg),
         "stream": True,
+        # 只有 debug 时才要求返回 usage：不改变常规请求的形状。
+        **({"stream_options": {"include_usage": True}}
+           if debug.enabled() else {}),
         # 尽量不让模型把工具调用的控制标记写进正文；sanitize 里还有一层兜底。
         "stop": ["<｜｜DSML｜｜", "</｜｜DSML｜｜>", "<||DSML||", "</||DSML||>"],
     }
@@ -131,6 +142,9 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
 
     flt = StreamFilter()
     reported_mode = None
+    usage = None
+    started_at = time.monotonic()
+    first_at = None
 
     def _emit(text):
         if text and on_chunk:
@@ -166,6 +180,8 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
             except json.JSONDecodeError:
                 continue
 
+            if obj.get("usage"):
+                usage = obj["usage"]
             try:
                 delta = obj["choices"][0].get("delta") or {}
             except (KeyError, IndexError, TypeError):
@@ -175,6 +191,8 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
                 continue
 
             out = flt.feed(piece)
+            if out and first_at is None:
+                first_at = time.monotonic()
             _emit(out)
             _maybe_report_mode()
     except Exception as e:
@@ -188,6 +206,12 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
     tail = flt.finish()
     _emit(tail)
     _maybe_report_mode()
+
+    if debug.enabled():
+        elapsed = time.monotonic() - started_at
+        first = "%.2fs" % (first_at - started_at) if first_at else "-"
+        debug.log("llm: %.2fs first_token=%s" % (elapsed, first))
+        debug.log(debug.usage_line(usage))
 
     if not flt.acc.strip():
         raise LLMError("LLM 未返回内容")

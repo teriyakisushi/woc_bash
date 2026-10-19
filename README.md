@@ -57,7 +57,7 @@ export WOC_API_KEY="sk-xxxx"
 export WOC_API_BASE="https://api.deepseek.com"
 export WOC_MODEL="deepseek-flash"
 export WOC_TIMEOUT="30"
-export WOC_OUTPUT_MAXTOKENS="4096"
+export WOC_MAX_OUTPUT_TOKENS="4096"   # 等价于 [budget] max_output_tokens
 export WOC_CAPTURE_SUDO="1"   # 等价于 [sudo] capture_output = true
 export WOC_CONTEXT_LS="1"     # 等价于 [context] ls_on_start = true
 export WOC_LOOP="1"           # 等价于 [loop] enabled = true
@@ -65,6 +65,9 @@ export WOC_SYNTAX_CHECK="0"   # 等价于 [exec] syntax_check = false
 export WOC_SPINNER="0"        # 等价于 [ui] spinner = false
 export WOC_PIPE="0"           # 等价于 [pipe] enabled = false
 export WOC_PIPE_MAX_CHARS="32000"   # 等价于 [pipe] max_chars
+export WOC_MAX_INPUT_CHARS="32000"  # 等价于 [budget] max_input_chars
+export WOC_CONTEXT_TOKENS="64000"   # 等价于 [budget] context_tokens
+export WOC_DEBUG="1"                # 等价于 [debug] enabled = true
 ```
 
 ### 配置文件
@@ -76,7 +79,6 @@ api_key = "sk-xxxx"
 api_base = "https://api.deepseek.com"
 model = "deepseek-flash"
 timeout = 30
-output_maxtokens = 4096
 
 [prefix]
 alias = "woc"
@@ -104,14 +106,54 @@ spinner = true
 
 [pipe]
 enabled = true
-max_chars = 32000
+# max_chars = 32000        # 可选：默认跟随 budget.max_input_chars
+
+[budget]
+context_tokens = 64000     # 模型上下文窗口
+max_output_tokens = 4096   # 单次回复上限
+max_input_chars = 32000    # 单次输入（管道数据）上限
+
+[debug]
+enabled = false
 ```
 
 环境变量优先于配置文件。默认 API Base 是
 `https://api.deepseek.com`，默认模型是 `deepseek-flash`。
 
-`output_maxtokens` 控制单次回复的最大 token 数（默认 `4096`）。调小可以省 token，
-但可能把命令或回答截断；对应环境变量 `WOC_OUTPUT_MAXTOKENS`。
+### 预算（`[budget]`）
+
+三个数字一起决定"这一次请求能有多大"，分散配置很容易配出互相矛盾的值
+（比如输入上限比模型窗口还大），所以统一在一处：
+
+| 键 | 默认 | 作用 |
+|---|---|---|
+| `context_tokens` | 64000 | 模型上下文窗口 |
+| `max_output_tokens` | 4096 | 单次回复上限（太小会截断命令/回答） |
+| `max_input_chars` | 32000 | 单次输入（管道数据）上限，单位是字符 |
+
+换算按保守的 2 字符/token：有效输入上限 = `min(max_input_chars, (context_tokens - max_output_tokens - system 段) × 2)`，
+所以把 `max_input_chars` 调到很大也不会撞上下文。
+旧的根级 `output_maxtokens` 和 `WOC_OUTPUT_MAXTOKENS` 仍然可用（等同于
+`[budget] max_output_tokens`），新配置建议放到 `[budget]`。
+
+### 调试与观测（`[debug]`）
+
+`WOC_DEBUG=1`（或 `[debug] enabled = true`）会把观测信息打到 **stderr**，
+stdout 不受影响，管道模式可以照常 `| less`：
+
+```text
+[woc] debug: pipe: max_chars=32000 reserved=1140 chars
+[woc] debug: pipe: stdin=1842 chars truncated=False
+[woc] debug: request: model=deepseek-flash messages=3 chars=2900 max_tokens=4096 timeout=30s
+[woc] debug: budget: context=64000tok output=4096tok input<=32000chars effective_input<=32000chars
+[woc] debug: templates: 4 total, strategy=full, bodies=4, index=420 chars, body=2810 chars
+[woc] debug: step 2/5: tier=confirm cmd='du -sh /var/log'
+[woc] debug: llm: 2.31s first_token=0.84s
+[woc] debug: usage: prompt=3456 completion=128 total=3584 cache_hit=3200 cache_miss=256
+```
+
+`usage` 里的 `cache_hit` / `cache_miss` 就是服务端前缀缓存的命中量 ——
+改 prompt 稳定段之后，这两个数字应该保持稳定（见 `docs/DESIGN-agentic-loop.md` §7）。
 
 ### 命令名与提示前缀（`[prefix]`）
 

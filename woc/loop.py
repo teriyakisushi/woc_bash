@@ -10,6 +10,7 @@
 import re
 import sys
 
+from . import debug
 from .colors import C, cout, eprint, interactive_input, read_key
 from .config import spinner as spinner_enabled
 from .config import syntax_check as syntax_check_enabled
@@ -313,6 +314,8 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
             return
 
         tier = risk_tier(cmd)
+        if debug.enabled():
+            debug.log("step %d/%d: tier=%s cmd=%r" % (step, max_steps, tier, cmd[:80]))
         if tier == "deny":
             reason = dangerous_reason(cmd) or "命中安全策略"
             block = _rejected(

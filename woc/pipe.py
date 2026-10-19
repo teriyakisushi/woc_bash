@@ -17,6 +17,7 @@ import os
 import re
 import sys
 
+from . import debug
 from .colors import C, eprint
 from .config import pipe_max_chars, prefix, spinner as spinner_enabled
 from .context import render_environment
@@ -146,7 +147,11 @@ def run_pipe_mode(argv, cfg):
     alias = prefix(cfg, "alias")
     name = prefix(cfg, "woc_prefix")
     question = " ".join(argv).strip() or DEFAULT_QUESTION
-    max_chars = pipe_max_chars(cfg)
+    # system 段是要预留的：预算算的是"还能塞多少数据"，不是总量。
+    reserved = (len(PIPE_SYSTEM_PROMPT)
+                + len(render_environment(confirm_hint=False)))
+    max_chars = pipe_max_chars(cfg, reserved_chars=reserved)
+    debug.log("pipe: max_chars=%d reserved=%d chars" % (max_chars, reserved))
 
     try:
         data, truncated = read_stdin(max_chars)
@@ -156,6 +161,7 @@ def run_pipe_mode(argv, cfg):
     except PipeInputError as exc:
         eprint(f"[{alias}] {exc}。", C.RED)
         return 2
+    debug.log("pipe: stdin=%d chars truncated=%s" % (len(data), truncated))
     if truncated:
         eprint(f"[{alias}] 输入超过 {max_chars} 字符，已截断（只分析保留的部分）",
                C.YELLOW)
