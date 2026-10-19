@@ -32,6 +32,7 @@ python3 woc.py "查看当前目录下最大的 3 个文件"   # 单轮（会 exe
 python3 wocc.py --loop                          # 多轮 + agentic loop
 python3 woc.py --templates                      # 模板索引与两层注入
 python3 woc.py --check-templates                # 模板自检（应 0 error / 2 warning）
+WOC_DEBUG=1 python3 woc.py "..."                # 观测 usage/缓存/前缀规模（stderr）
 
 python3 -m compileall -q woc tests              # 语法
 python3 -m unittest discover -s tests           # 离线回归（40+ 个用例，1 个 live skip，~100ms）
@@ -55,6 +56,8 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 | `woc/exec.py` | 命令执行、`bash -n` 语法预检、sudo/pty 捕获、`format_exec_result` |
 | `woc/ui.py` | `Spinner`：等待模型/执行命令的一行式 loading（仅 tty） |
 | `woc/pipe.py` | 管道模式：stdin 当数据、只问答不执行；二进制拒绝、头尾截断 |
+| `woc/budget.py` | 预算换算：context / output / input 三者互相约束 |
+| `woc/debug.py` | `WOC_DEBUG=1` 观测：usage、前缀、输入规模、loop 步（只写 stderr） |
 | `woc/config.py` | 分段配置 + 环境变量优先 |
 | `woc/colors.py` | 自绘行编辑器 + 彩色输出（**改动风险最高**） |
 | `compile.py` | 安装器（命令改名、全局模板、卸载） |
