@@ -2,6 +2,7 @@ import os
 import sys
 
 from .cli.chat import woc_chat_main
+from .cli.completion import SHELLS, render as render_completion
 from .cli.single import woc_main
 from .config import load_config, prefix
 from .context import (BODY_BUDGET, install_templates, lint_templates,
@@ -10,6 +11,7 @@ from .context import (BODY_BUDGET, install_templates, lint_templates,
 
 _LOG_ALIAS = "woc"
 _COMMAND = "woc"
+_COMMANDS = ["woc", "wocc", "woc_chat"]
 
 
 def _cmd_list_templates(query=None):
@@ -114,15 +116,26 @@ def _split_query(rest):
     return " ".join(rest)
 
 
+def _cmd_completion(rest):
+    shell = rest[0] if rest else ""
+    if shell not in SHELLS:
+        print(f"用法: {_COMMAND} --completion bash|zsh", file=sys.stderr)
+        return 2
+    print(render_completion(shell, _COMMANDS))
+    return 0
+
+
 def _tag():
     return f"[{_LOG_ALIAS}]"
 
 
 def main():
-    global _LOG_ALIAS, _COMMAND
+    global _LOG_ALIAS, _COMMAND, _COMMANDS
     cfg = load_config()
     _LOG_ALIAS = prefix(cfg, "alias")
     _COMMAND = prefix(cfg, "woc_prefix")
+    _COMMANDS = [prefix(cfg, "woc_prefix"), prefix(cfg, "wocc_prefix"),
+                 prefix(cfg, "woc_chat_prefix")]
     prog = os.path.basename(sys.argv[0])
     argv = sys.argv[1:]
     if prog == "wocc":
@@ -131,6 +144,8 @@ def main():
         wocc_main(argv)
     elif argv and argv[0] in ("-c", "--chat"):
         woc_chat_main(argv[1:], name=_COMMAND, via_woc=True)
+    elif argv and argv[0] == "--completion":
+        sys.exit(_cmd_completion(argv[1:]))
     elif argv and argv[0] == "--templates":
         sys.exit(_cmd_list_templates(_split_query(argv[1:])))
     elif argv and argv[0] == "--check-templates":
