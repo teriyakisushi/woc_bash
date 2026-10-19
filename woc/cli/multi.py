@@ -38,6 +38,8 @@ def wocc_main(argv):
         # 非终端时 read_key() 会退化成 input()，管道里的任意一行都会变成“确认”。
         eprint(f"[{alias}] {name} 需要终端：当前标准输入不是终端，"
                "无法逐条确认命令，已退出。", C.RED)
+        eprint(f"[{alias}] 想把命令输出当数据提问，用: <命令> | "
+               f"{prefix(cfg, 'woc_prefix')} \"你的问题\"", C.GREEN)
         sys.exit(2)
 
     # 会话级稳定前缀：system prompt + 多轮说明（+loop 说明） + template 参考库 + 环境。

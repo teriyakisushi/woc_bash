@@ -37,6 +37,13 @@ EXEC_DEFAULTS = {"syntax_check": True}
 # [ui] 段：等待模型/执行命令时的 loading（仅 tty 生效）。
 UI_DEFAULTS = {"spinner": True}
 
+# [pipe] 段：标准输入不是终端时，把 stdin 当数据问答（只回答、不执行命令）。
+PIPE_DEFAULTS = {"enabled": True, "max_chars": 32000}
+
+# 单次送入模型的字符上限。120000 字符约 30k-40k tokens，已占掉模型上下文的大半；
+# 这是防误配的绝对上限，不是产品推荐值。
+PIPE_MAX_CHARS_LIMIT = 120000
+
 
 def _to_bool(value):
     return str(value).strip().lower() not in ("", "0", "false", "no", "off")
@@ -111,6 +118,21 @@ def spinner(cfg):
     return bool((cfg.get("ui") or {}).get("spinner", UI_DEFAULTS["spinner"]))
 
 
+def pipe_enabled(cfg):
+    """标准输入不是终端时，是否把 stdin 当数据问答（[pipe] enabled）。"""
+    return bool((cfg.get("pipe") or {}).get("enabled", PIPE_DEFAULTS["enabled"]))
+
+
+def pipe_max_chars(cfg):
+    """管道模式单次送入模型的最大字符数（[pipe] max_chars）。"""
+    settings = cfg.get("pipe") or {}
+    try:
+        value = int(settings.get("max_chars", PIPE_DEFAULTS["max_chars"]))
+    except (TypeError, ValueError):
+        value = PIPE_DEFAULTS["max_chars"]
+    return min(max(value, 1), PIPE_MAX_CHARS_LIMIT)
+
+
 def load_config(path=None):
     """读取配置；环境变量优先于配置文件。
 
@@ -121,7 +143,7 @@ def load_config(path=None):
         wocc_prefix = "qwee"
         woc_chat_prefix = "qwe_chat"
 
-    以及 [sudo] / [context] / [exec] / [ui] 段：
+    以及 [sudo] / [context] / [exec] / [ui] / [pipe] 段：
         [sudo]
         capture_output = false
 
@@ -133,6 +155,10 @@ def load_config(path=None):
 
         [ui]
         spinner = true
+
+        [pipe]
+        enabled = true
+        max_chars = 32000
 
     根级 output_maxtokens 控制单次回复的最大 token 数（默认 4096）。
     """
@@ -161,6 +187,11 @@ def load_config(path=None):
         },
         "ui": {
             "spinner": _env_bool("WOC_SPINNER", UI_DEFAULTS["spinner"]),
+        },
+        "pipe": {
+            "enabled": _env_bool("WOC_PIPE", PIPE_DEFAULTS["enabled"]),
+            "max_chars": _env_positive_int(
+                "WOC_PIPE_MAX_CHARS", PIPE_DEFAULTS["max_chars"], notes),
         },
     }
 
@@ -213,6 +244,15 @@ def load_config(path=None):
                 if section == "ui":
                     if key == "spinner" and "WOC_SPINNER" not in os.environ:
                         cfg["ui"]["spinner"] = _to_bool(value)
+                    continue
+                if section == "pipe":
+                    if key == "enabled" and "WOC_PIPE" not in os.environ:
+                        cfg["pipe"]["enabled"] = _to_bool(value)
+                    elif (key == "max_chars"
+                          and "WOC_PIPE_MAX_CHARS" not in os.environ):
+                        cfg["pipe"]["max_chars"] = _file_positive_int(
+                            value, PIPE_DEFAULTS["max_chars"], notes,
+                            "pipe.max_chars")
                     continue
                 if section:
                     continue

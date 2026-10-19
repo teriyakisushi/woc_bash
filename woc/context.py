@@ -497,10 +497,11 @@ def render_listing(cwd=None, max_lines=LS_MAX_LINES, max_chars=LS_MAX_CHARS):
     ])
 
 
-def render_environment(cwd=None, platform=None, facts=None):
+def render_environment(cwd=None, platform=None, facts=None, confirm_hint=True):
     """dynamic 段：只放会变的环境事实，必须排在 stable 段之后。
 
     facts 不传时使用进程内缓存的事实（发行版 / uid / groups / 容器类型）。
+    confirm_hint=False 用于管道模式：那里没有命令执行，也就没有“人工确认”。
     """
     cwd = cwd or os.getcwd()
     if platform is None:
@@ -512,7 +513,8 @@ def render_environment(cwd=None, platform=None, facts=None):
         f"platform: {platform} (shell: bash)",
     ]
     lines.extend(facts if facts is not None else _static_facts())
-    lines.append("用户在终端里，命令执行前会有人工确认。")
+    if confirm_hint:
+        lines.append("用户在终端里，命令执行前会有人工确认。")
     lines.append("</environment>")
     return "\n".join(lines)
 

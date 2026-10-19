@@ -12,6 +12,7 @@ Shell 命令，也可以回答问题、执行命令并在多轮会话中继续�
 - 对高风险命令进行拦截，例如删除根目录、格式化磁盘和关机等。
 - 支持 Backspace 编辑输入内容；彩色 prompt 不会被 readline 当作可编辑文本。
 - 等待模型/执行命令时显示一行 loading；仅在终端生效，可用 `[ui] spinner` 关闭。
+- 管道模式：`dmesg | woc "分析一下"` 把标准输入当数据，只回答、不执行。
 
 ## 环境要求
 
@@ -62,6 +63,8 @@ export WOC_CONTEXT_LS="1"     # 等价于 [context] ls_on_start = true
 export WOC_LOOP="1"           # 等价于 [loop] enabled = true
 export WOC_SYNTAX_CHECK="0"   # 等价于 [exec] syntax_check = false
 export WOC_SPINNER="0"        # 等价于 [ui] spinner = false
+export WOC_PIPE="0"           # 等价于 [pipe] enabled = false
+export WOC_PIPE_MAX_CHARS="32000"   # 等价于 [pipe] max_chars
 ```
 
 ### 配置文件
@@ -98,6 +101,10 @@ syntax_check = true
 
 [ui]
 spinner = true
+
+[pipe]
+enabled = true
+max_chars = 32000
 ```
 
 环境变量优先于配置文件。默认 API Base 是
@@ -331,6 +338,36 @@ woc 查找最近一天修改过的 Python 文件
 如果模型返回的是命令，终端会先显示命令并等待确认；按 `Enter` 执行，
 按 `Ctrl+C` 取消。如果请求被识别为解释类问题，`woc` 会直接输出回答。
 
+### 管道模式（把命令输出当数据）
+
+```bash
+dmesg | woc "最近有什么异常"
+journalctl -p err -n 200 | woc "归纳一下根因"
+git diff | woc "review 这段改动"
+kubectl get pods | woc "哪些 pod 不正常"
+cat err.log | woc              # 没给问题时走内置的“排查/总结”指令
+```
+
+标准输入不是终端时自动进入管道模式：把 stdin 包成 `<stdin>` 块交给模型，
+**只回答、不执行任何命令**。这条路径里没有命令执行，所以"每条命令都要人工确认"
+的边界没有被放宽 —— 非终端输入本来就没法确认。答案走 stdout、提示走 stderr，
+可以继续 `| less` 或 `> out.md`。
+
+- 不注入 `<templates>`：那是命令参考，对"分析日志"只是噪音；
+- 输入上限由 `[pipe] max_chars` 控制（默认 32000 字符）；超出时保留头 60% + 尾 40%，
+  并在给模型的内容里显式标注"已截断"；
+- 含 NUL 字节的二进制输入直接拒绝；ANSI 颜色会被剥掉；
+- 和 `grep` 一样读到 EOF 才发请求：`tail -f` 这类不会结束的命令需要 `Ctrl+C` 取消；
+- 用 `[pipe] enabled = false` 关掉本模式后，非终端输入退回"无法确认执行"的拒绝。
+
+```toml
+[pipe]
+enabled = true
+max_chars = 32000
+```
+
+对应环境变量 `WOC_PIPE=0` / `WOC_PIPE_MAX_CHARS=...`。
+
 ### 多轮会话
 
 ```bash
@@ -400,6 +437,10 @@ LLM 输出不应被视为绝对可信。执行命令前请检查命令内容、�
 `--loop` 会把"每条命令都要人工确认"的边界下移：默认每一步仍需确认，只有
 `auto_safe=true` 时"只读单命令"才免确认；粘性续步只改变“回合何时结束”，
 不改变“每条命令是否要确认”；步数、累计输出都有硬上限，越界会明确提示。
+
+标准输入不是终端时：`woc` 进入管道模式（只回答、不执行）；`wocc` 与 `woc -c`
+（没有首轮问题时）直接拒绝启动 —— 交互式确认需要终端，不能拿管道里的任意一行
+冒充回车。
 
 ### sudo 与权限
 

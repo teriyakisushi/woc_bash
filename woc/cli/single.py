@@ -2,7 +2,7 @@ import os
 import sys
 
 from ..colors import C, cout, eprint
-from ..config import (load_config, ls_on_start, prefix,
+from ..config import (load_config, ls_on_start, pipe_enabled, prefix,
                       spinner as spinner_enabled,
                       syntax_check as syntax_check_enabled)
 from ..context import build_messages
@@ -20,15 +20,23 @@ def woc_main(argv):
     alias = prefix(cfg, "alias")
     with_listing = ls_on_start(cfg)
 
-    if not argv or argv[0] in ("-h", "--help"):
+    wants_help = bool(argv) and argv[0] in ("-h", "--help")
+
+    # 管道模式优先于“没有参数就显示用法”：`cat err.log | woc` 是有意义的。
+    if not wants_help and not sys.stdin.isatty() and pipe_enabled(cfg):
+        # 延迟导入：正常的终端路径不加载 pipe 模块，启动开销保持为 0。
+        from ..pipe import run_pipe_mode
+        sys.exit(run_pipe_mode(argv, cfg))
+
+    if not argv or wants_help:
         print(f"用法: {name} <自然语言描述>")
         print(f"示例: {name} 帮我抓一次实时资源的 snapshot 到 a.txt")
         print(f"     {name} 解释一下 du -sh 的用法")
+        print(f"管道: <命令> | {name} \"你的问题\"   # 标准输入当数据，只回答、不执行")
         sys.exit(0)
 
     if not sys.stdin.isatty():
-        # 没有终端就没有“一次人工确认”。旧行为是 input() 读走管道的第一行、
-        # 把任意内容当成 Enter，等于绕过确认；这里直接拒绝。
+        # 管道模式被显式关掉时，退回“没有终端就没有确认”的保守行为。
         eprint(f"[{alias}] 当前标准输入不是终端，无法确认执行，已退出。", C.RED)
         eprint(f"[{alias}] 命令执行需要终端里的一次人工确认。", C.GREEN)
         sys.exit(2)

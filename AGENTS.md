@@ -16,7 +16,8 @@
 3. **模型输出是单行命令**：`sanitize()` 只取第一条有效行，多行会被静默截断；
    工具调用/XML 残留（DSML、`<exec_result>`、`</br>`）会被拒绝，不会执行。
 4. **人工确认是边界**：每条命令执行前必须有一次确认。loop 只把"只读单命令"在
-   `auto_safe=true` 时免确认，其余仍然逐条确认。
+   `auto_safe=true` 时免确认，其余仍然逐条确认。非终端输入没有确认可言：
+   `woc` 走管道模式（只问答、不执行），`wocc` / `woc -c` 直接拒绝启动。
 5. **前缀缓存**：稳定段（SYSTEM_PROMPT / MULTI_TURN_HINT(+LOOP_HINT) / `<templates>` /
    `<environment>`）在一个会话内必须逐字节不变。不要往里面塞时间、git 状态、实时负载。
 6. **模板只是文本**：`<templates>` 里的命令与用户手输的命令同权，必须同样过危险检查。
@@ -53,6 +54,7 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 | `woc/gate.py` | 结构化危险判定：命令位置、包装器、递归、保守回退 |
 | `woc/exec.py` | 命令执行、`bash -n` 语法预检、sudo/pty 捕获、`format_exec_result` |
 | `woc/ui.py` | `Spinner`：等待模型/执行命令的一行式 loading（仅 tty） |
+| `woc/pipe.py` | 管道模式：stdin 当数据、只问答不执行；二进制拒绝、头尾截断 |
 | `woc/config.py` | 分段配置 + 环境变量优先 |
 | `woc/colors.py` | 自绘行编辑器 + 彩色输出（**改动风险最高**） |
 | `compile.py` | 安装器（命令改名、全局模板、卸载） |
