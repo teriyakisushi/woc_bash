@@ -25,6 +25,7 @@
    `woc` 单轮每次调用生成。它属于 dynamic 事实，不要写进模板或 system prompt。
 """
 
+import math
 import os
 import re
 import shutil
@@ -273,25 +274,84 @@ def query_terms(query):
     return {t for t in terms if len(t) >= 2}
 
 
-def score_template(tpl, query):
-    """给模板打分。标签命中权重最高 —— tags 是用户为检索专门写的字段。
+# 字段权重：when/desc 是作者专门写给检索的，正文只是补充。
+FIELD_WEIGHTS = {"when": 2.5, "desc": 1.5, "body": 1.0}
+# 标签是人为选的检索键，命中就该压过普通词项。
+TAG_WEIGHT = 10.0
+ID_WEIGHT = 20.0
 
-    用"标签是查询的子串"而不是"查询词命中标签"，因为中文查询里标签总是更短的一侧：
-    `'看看日志'` 含 `'日志'`。
+
+def _is_ascii(text):
+    return all(ord(ch) < 128 for ch in text)
+
+
+def _word_char(ch):
+    return bool(ch) and (ch.isalnum() or ch == "_")
+
+
+def tag_matches(tag, query_lower):
+    """标签命中。ASCII 按词边界，CJK 按子串。
+
+    `log` 不该命中 `catalog`；`日志` 在中文里本来就是子串语义，保持原行为。
     """
+    tag_l = (tag or "").strip().lower()
+    if not tag_l:
+        return False
+    if _is_ascii(tag_l):
+        start = 0
+        while True:
+            index = query_lower.find(tag_l, start)
+            if index < 0:
+                return False
+            before = query_lower[index - 1] if index else ""
+            after = query_lower[index + len(tag_l):
+                                index + len(tag_l) + 1]
+            if not _word_char(before) and not _word_char(after):
+                return True
+            start = index + 1
+    return tag_l in query_lower
+
+
+def _term_weights(templates, terms):
+    """按文档频率给词项降权：几乎每个模板都命中的词，区分度接近于零。
+
+    归一化到 (0, 1]：只在 1 个模板里出现的词权重 1.0，全覆盖的词趋近 0。
+    没有语料库可查，用当前模板集当 corpus —— 这正是"相对重要性"的来源。
+    """
+    total = len(templates)
+    if total <= 0 or not terms:
+        return {}
+    weights = {}
+    for term in terms:
+        df = sum(1 for tpl in templates
+                 if term in tpl.haystack() or term in tpl.body.lower())
+        if not df:
+            continue
+        weights[term] = math.log((total + 1) / df) / math.log(total + 1)
+    return weights
+
+
+def score_template(tpl, query, weights=None):
+    """给模板打分。标签命中权重最高 —— tags 是用户为检索专门写的字段。"""
     lowered = (query or "").lower()
-    score = 0
+    if not lowered:
+        return 0.0
+    weights = weights or {}
+    score = 0.0
     for tag in tpl.tags:
-        tag_l = tag.lower().strip()
-        if tag_l and tag_l in lowered:
-            score += 10
+        if tag_matches(tag, lowered):
+            score += TAG_WEIGHT * weights.get(tag.strip().lower(), 1.0)
     if tpl.id.lower() in lowered:
-        score += 20
-    haystack = tpl.haystack()
+        score += ID_WEIGHT
     for term in query_terms(query):
-        if term in haystack:
-            score += 1
-    return score
+        weight = weights.get(term, 1.0)
+        if term in tpl.when.lower():
+            score += FIELD_WEIGHTS["when"] * weight
+        elif term in tpl.desc.lower():
+            score += FIELD_WEIGHTS["desc"] * weight
+        elif term in tpl.body.lower():
+            score += FIELD_WEIGHTS["body"] * weight
+    return round(score, 2)
 
 
 def select_bodies(templates, query="", budget=BODY_BUDGET):
@@ -300,15 +360,19 @@ def select_bodies(templates, query="", budget=BODY_BUDGET):
     返回 (selected, strategy, scores)。strategy ∈ {"full", "ranked"}。
     - 全部正文装得下预算 → full（行为与"全量注入"完全一致）
     - 装不下 → ranked，按分数降序填充，同分按 id 保证确定性
+    - ranked 下分数为 0 的模板不注入正文：它们是纯噪音，只会挤占预算
     """
     ordered = sorted(templates, key=lambda t: t.id)
-    scores = {t.id: score_template(t, query) for t in ordered}
+    weights = _term_weights(ordered, query_terms(query))
+    scores = {t.id: score_template(t, query, weights) for t in ordered}
     if sum(len(t.as_unit()) for t in ordered) <= budget:
         return ordered, "full", scores
 
     ranked = sorted(ordered, key=lambda t: (-scores[t.id], t.id))
     picked, used = [], 0
     for tpl in ranked:
+        if scores[tpl.id] <= 0:
+            break
         size = len(tpl.as_unit())
         if picked and used + size > budget:
             continue
