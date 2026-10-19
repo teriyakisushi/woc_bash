@@ -178,3 +178,78 @@ class MultiIntegrationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ArchiveTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.tmp.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_save_creates_archive_and_lists_it(self):
+        session.save([{"role": "user", "content": "q"}])
+        items = session.list_sessions()
+        self.assertEqual(len(items), 1)
+        self.assertTrue(items[0]["name"].startswith("session-"))
+        self.assertEqual(items[0]["count"], 1)
+
+    def test_load_by_name(self):
+        session.save([{"role": "user", "content": "hello"}])
+        name = session.list_sessions()[0]["name"]
+        loaded = session.load(name=name)
+        self.assertEqual(loaded["messages"][0]["content"], "hello")
+
+    def test_load_accepts_json_suffix(self):
+        session.save([{"role": "user", "content": "x"}])
+        name = session.list_sessions()[0]["name"]
+        self.assertIsNotNone(session.load(name=name + ".json"))
+
+    def test_bad_names_are_rejected(self):
+        for name in ("../etc/passwd", "a/b", "", "中文", "-x"):
+            self.assertIsNone(session.load(name=name))
+            self.assertIsNone(session._named_path(name))
+
+
+class SessionFlagTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.tmp.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.stderr = io.StringIO()
+
+    def run_cli(self, argv, inputs=(":q",)):
+        with mock.patch.object(sys, "stdin", FakeTty()), \
+                mock.patch.object(multi, "load_config", return_value=CFG), \
+                mock.patch.object(multi, "interactive_input",
+                                  side_effect=list(inputs)), \
+                redirect_stderr(self.stderr), redirect_stdout(io.StringIO()):
+            multi.wocc_main(argv)
+
+    def test_sessions_lists_saved_ones(self):
+        session.save([{"role": "user", "content": "q"}])
+        with self.assertRaises(SystemExit) as ctx:
+            self.run_cli(["--sessions"])
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertIn("已保存的会话", self.stderr.getvalue())
+
+    def test_sessions_without_data(self):
+        with self.assertRaises(SystemExit):
+            self.run_cli(["--sessions"])
+        self.assertIn("还没有保存过会话", self.stderr.getvalue())
+
+    def test_resume_named_session(self):
+        session.save([{"role": "user", "content": "旧问题"},
+                      {"role": "assistant", "content": "#CHAT: 旧回答"}])
+        name = session.list_sessions()[0]["name"]
+        self.run_cli(["--resume", name])
+        self.assertIn("已恢复上次会话", self.stderr.getvalue())
+
+    def test_resume_without_name_exits_2(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self.run_cli(["--resume"])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("需要一个会话名", self.stderr.getvalue())

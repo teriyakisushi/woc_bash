@@ -12,6 +12,7 @@
 
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -24,6 +25,11 @@ MAX_MESSAGES = 40
 MAX_CHARS = 60000
 # 单条消息上限：一条超长的命令输出不该把整个历史挤掉。
 MAX_MESSAGE_CHARS = 12000
+# 归档保留数量：--sessions 列表用，超出就删最旧的。
+MAX_ARCHIVES = 20
+
+# --resume 的名字会拼成文件名，只允许安全字符。
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _TRUNCATED = " …（已截断）"
 
@@ -87,9 +93,41 @@ def _prepare_last(last):
     return prepared or None
 
 
+def _write_payload(payload, path):
+    """原子写入 + 0600。失败抛 OSError，由调用方决定是否吞掉。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    fd, temporary = tempfile.mkstemp(dir=str(path.parent),
+                                     prefix=".last-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+
+def _prune_archives(directory, keep=MAX_ARCHIVES):
+    archives = sorted(directory.glob("session-*.json"))
+    for path in archives[:-keep]:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
 def save(messages, cwd=None, model=None, max_messages=MAX_MESSAGES,
          max_chars=MAX_CHARS, last=None):
-    """原子写入 last-session.json。成功返回 True；任何 OSError 都返回 False。"""
+    """写 last.json，同时留一份带时间戳的归档（供 --sessions 列出）。
+
+    成功返回 True；任何 OSError 都返回 False —— 会话保存失败不该打断对话。
+    """
     history = prepare(messages, max_messages, max_chars)
     if not history:
         return False
@@ -104,32 +142,36 @@ def save(messages, cwd=None, model=None, max_messages=MAX_MESSAGES,
     if prepared_last:
         payload["last"] = prepared_last
     path = session_path()
-    temporary = None
+    archive = path.parent / time.strftime("session-%Y%m%d-%H%M%S.json")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(path.parent, 0o700)
-        fd, temporary = tempfile.mkstemp(dir=str(path.parent),
-                                         prefix=".last-", suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False)
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-        temporary = None
+        _write_payload(payload, path)
+        _write_payload(payload, archive)
+        _prune_archives(path.parent)
         return True
     except OSError:
         return False
-    finally:
-        if temporary:
-            try:
-                os.unlink(temporary)
-            except OSError:
-                pass
 
 
-def load(max_messages=MAX_MESSAGES, max_chars=MAX_CHARS):
-    """读回上一次会话。不存在 / 损坏 / 版本不符都返回 None。"""
+def _named_path(name):
+    """把 --resume 的名字变成 sessions 目录下的文件；非法名字返回 None。"""
+    clean = str(name or "").strip()
+    if clean.endswith(".json"):
+        clean = clean[:-5]
+    if not clean or not NAME_RE.match(clean):
+        return None
+    return session_path().parent / (clean + ".json")
+
+
+def load(max_messages=MAX_MESSAGES, max_chars=MAX_CHARS, name=None):
+    """读回会话。name=None 读 last.json；否则读 --resume 指定的归档。"""
+    if name in (None, "", "last"):
+        path = session_path()
+    else:
+        path = _named_path(name)
+        if path is None:
+            return None
     try:
-        raw = session_path().read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8")
         payload = json.loads(raw)
     except (OSError, ValueError):
         return None
@@ -152,6 +194,27 @@ def load(max_messages=MAX_MESSAGES, max_chars=MAX_CHARS):
         return None
     payload["messages"] = history
     return payload
+
+
+def list_sessions(limit=10):
+    """列出最近的归档会话。last.json 是"最近一次"的指针，不重复列。"""
+    directory = session_path().parent
+    items = []
+    for path in directory.glob("session-*.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("version") != VERSION:
+            continue
+        items.append({
+            "name": path.stem,
+            "saved_at": payload.get("saved_at", ""),
+            "cwd": payload.get("cwd", ""),
+            "count": len(payload.get("messages") or []),
+        })
+    items.sort(key=lambda item: item["saved_at"], reverse=True)
+    return items[:limit]
 
 
 def context_note(payload):

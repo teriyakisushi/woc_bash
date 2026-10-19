@@ -30,18 +30,49 @@ def show_help(alias):
 
 
 
+def show_sessions(alias, command_name):
+    """列出最近保存的会话（`--sessions`）。"""
+    items = session.list_sessions()
+    if not items:
+        eprint(f"[{alias}] 还没有保存过会话"
+               "（[session] persist 开启后每回合自动保存）", C.YELLOW)
+        return
+    eprint(f"[{alias}] 已保存的会话（最近 {len(items)} 个）：",
+           C.GREEN, C.BOLD)
+    for item in items:
+        eprint(f"  {item['saved_at']}  {item['count']:>3} 条  {item['name']}",
+               C.GRAY)
+        eprint(f"      {item['cwd']}", C.GRAY)
+    eprint(f"[{alias}] 恢复：{command_name} --resume <会话名>"
+           f"   或   {command_name} --last-session", C.GREEN)
+
+
 def wocc_main(argv):
     argv = list(argv)
     capture_flag = "--capture-sudo" in argv
     loop_flag = "--loop" in argv
     resume_flag = "--last-session" in argv
+    list_flag = "--sessions" in argv
+    resume_name = None
+    if "--resume" in argv:
+        index = argv.index("--resume")
+        resume_name = argv[index + 1] if index + 1 < len(argv) else ""
+    flags = {"--capture-sudo", "--loop", "--last-session",
+             "--sessions", "--resume"}
     argv = [item for item in argv
-            if item not in ("--capture-sudo", "--loop", "--last-session")]
+            if item not in flags and item != resume_name]
 
     cfg = load_config()
     name = prefix(cfg, "wocc_prefix")
     alias = prefix(cfg, "alias")
     capture = capture_flag or capture_sudo(cfg)
+    if list_flag:
+        show_sessions(alias, name)
+        sys.exit(0)
+    if resume_name == "":
+        eprint(f"[{alias}] --resume 需要一个会话名；"
+               f"先用 {name} --sessions 查看", C.RED)
+        sys.exit(2)
     settings = cfg.get("loop") or {}
     loop_enabled = loop_flag or bool(settings.get("enabled"))
     max_steps = max_steps_for(cfg, loop_enabled)
@@ -56,6 +87,8 @@ def wocc_main(argv):
         print("  --loop          开启粘性续步：用过 #STEP: 后，裸命令也继续（默认关闭）")
         print("  --capture-sudo  需要 sudo 密码时捕获输出并反馈给模型")
         print("  --last-session  恢复上一次 wocc 会话（[session] persist）")
+        print("  --sessions      列出已保存的会话")
+        print("  --resume NAME   恢复指定会话（名字来自 --sessions）")
         print("会话内命令: :q 退出 · :more / v 展开输出 · :last 看上一条命令")
         print("            :steps 本回合的步骤审计 · :explain 解释上一条命令与输出")
         sys.exit(0)
@@ -78,8 +111,9 @@ def wocc_main(argv):
         with_listing=ls_on_start(cfg),
     )
 
-    if resume_flag:
-        restored = session.load(store["max_messages"], store["max_chars"])
+    if resume_flag or resume_name:
+        restored = session.load(store["max_messages"], store["max_chars"],
+                                name=resume_name)
         if restored:
             messages.append({"role": "system",
                              "content": session.context_note(restored)})
