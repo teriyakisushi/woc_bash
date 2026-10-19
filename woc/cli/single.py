@@ -22,6 +22,12 @@ def woc_main(argv):
         print(f"     {name} 解释一下 du -sh 的用法")
         sys.exit(0)
 
+    if not sys.stdin.isatty():
+        # 没有终端就没有“一次人工确认”；旧行为会把管道第一行当成 Enter。
+        eprint(f"[{alias}] 当前标准输入不是终端，无法确认执行，已退出。", C.RED)
+        eprint(f"[{alias}] 命令执行需要终端里的一次人工确认。", C.GREEN)
+        sys.exit(2)
+
     user_input = " ".join(argv)
 
     state = {"mode": None}
