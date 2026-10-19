@@ -4,6 +4,7 @@ import urllib.error
 import urllib.request
 
 from .config import load_config
+from .context import build_messages
 from .prompts import SYSTEM_PROMPT
 
 _SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
@@ -96,8 +97,10 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
         "model": cfg["model"],
         "messages": messages,
         "temperature": 0,
-        "max_tokens": 4096,
+        "max_tokens": cfg.get("output_maxtokens", 4096),
         "stream": True,
+        # 尽量不让模型把工具调用的控制标记写进正文；sanitize 里还有一层兜底。
+        "stop": ["<｜｜DSML｜｜", "</｜｜DSML｜｜>", "<||DSML||", "</||DSML||>"],
     }
     req = urllib.request.Request(
         url,
@@ -180,9 +183,21 @@ def call_llm_messages(messages, cfg, on_chunk=None, on_mode=None):
     return call_llm_messages_stream(messages, cfg, on_chunk=on_chunk, on_mode=on_mode)
 
 
-def call_llm(user_input, cfg, on_chunk=None, on_mode=None):
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_input},
-    ]
+def call_llm(user_input, cfg, on_chunk=None, on_mode=None, system_prompt=None,
+             cwd=None, with_templates=True, with_environment=True,
+             with_listing=None):
+    """单轮调用。默认自动注入 template 参考库与运行环境（见 woc.context）。"""
+    if system_prompt is None:
+        system_prompt = SYSTEM_PROMPT.replace(
+            "{name}", cfg.get("prefix", {}).get("alias", "woc"))
+    if with_listing is None:
+        with_listing = bool((cfg.get("context") or {}).get("ls_on_start"))
+    messages = build_messages(
+        user_input,
+        system_prompt,
+        cwd=cwd,
+        with_templates=with_templates,
+        with_environment=with_environment,
+        with_listing=with_listing,
+    )
     return call_llm_messages(messages, cfg, on_chunk=on_chunk, on_mode=on_mode)

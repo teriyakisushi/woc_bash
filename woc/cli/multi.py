@@ -2,28 +2,47 @@ import os
 import sys
 
 from ..colors import C, cerr, cout, eprint, interactive_input
-from ..config import load_config
-from ..exec import format_exec_result, run_command_capture
+from ..config import capture_sudo, load_config, ls_on_start, prefix
+from ..context import messages_prefix
+from ..exec import (format_exec_result, format_foreground_result,
+                    needs_privilege, pty_capture_available,
+                    run_command_capture, run_command_capture_pty,
+                    run_command_foreground, sudo_ticket_valid)
 from ..llm import LLMError, StreamMode, call_llm_messages
-from ..prompts import MULTI_TURN_HINT, SYSTEM_PROMPT
-from ..sanitize import ChatResponse, CommandGenError, clean_text, is_dangerous, sanitize
+from ..prompts import MULTI_TURN_HINT, render_system_prompt
+from ..sanitize import (ChatResponse, CommandGenError, clean_text, is_dangerous,
+                        is_root_shell, sanitize)
 
 def wocc_main(argv):
+    argv = list(argv)
+    capture_flag = "--capture-sudo" in argv
+    if capture_flag:
+        argv = [item for item in argv if item != "--capture-sudo"]
+
+    cfg = load_config()
+    name = prefix(cfg, "wocc_prefix")
+    alias = prefix(cfg, "alias")
+    capture = capture_flag or capture_sudo(cfg)
+
     if argv and argv[0] in ("-h", "--help"):
-        print("用法: wocc [首轮自然语言描述]")
+        print(f"用法: {name} [首轮自然语言描述]")
         print("进入交互式多轮会话，每轮命令的执行结果会自动反馈给 LLM。")
         print("输入 :q / exit / quit 退出。")
         print("提问（如“解释一下”“为什么...”）会自动进入 chat 模式，不会被执行。")
+        print("  --capture-sudo  需要 sudo 密码时捕获输出并反馈给模型")
         sys.exit(0)
 
-    cfg = load_config()
+    # 会话级稳定前缀：system prompt + 多轮说明 + template 参考库 + 环境。
+    # 只在开始时构造一次，因此每轮请求的前缀逐字节相同 —— 前缀缓存能持续命中。
+    # 目录快照也只在启动时生成一次，随后作为前缀的一部分复用，不重复执行 ls。
+    messages = messages_prefix(
+        multi_turn=True,
+        system_prompt=render_system_prompt(alias),
+        multi_turn_hint=MULTI_TURN_HINT,
+        with_listing=ls_on_start(cfg),
+    )
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": MULTI_TURN_HINT},
-    ]
-
-    eprint("[woc] 已进入多轮会话，输入 :q 退出", C.GREEN, C.BOLD)
+    eprint(f"[{alias}] 已进入多轮会话，输入 :q 退出", C.GREEN, C.BOLD)
 
     pending_input = " ".join(argv) if argv else None
 
@@ -38,13 +57,13 @@ def wocc_main(argv):
                     cerr("[user] ", C.MAGENTA, C.BOLD)
                 ).strip()
             except (KeyboardInterrupt, EOFError):
-                eprint("\n[woc] 会话结束", C.GREEN)
+                eprint(f"\n[{alias}] 会话结束", C.GREEN)
                 break
 
         if not user_input:
             continue
         if user_input in (":q", "exit", "quit"):
-            eprint("[woc] 会话结束", C.GREEN)
+            eprint(f"[{alias}] 会话结束", C.GREEN)
             break
 
         messages.append({"role": "user", "content": user_input})
@@ -69,8 +88,8 @@ def wocc_main(argv):
                 messages, cfg, on_chunk=on_chunk, on_mode=on_mode
             )
         except LLMError as e:
-            eprint(f"[woc] LLM 调用失败：{e}", C.RED)
-            eprint("[woc] 本轮已跳过，可换个说法重试，或 :q 退出", C.YELLOW)
+            eprint(f"[{alias}] LLM 调用失败：{e}", C.RED)
+            eprint(f"[{alias}] 本轮已跳过，可换个说法重试，或 :q 退出", C.YELLOW)
             messages.pop()
             continue
 
@@ -78,18 +97,18 @@ def wocc_main(argv):
         if state["mode"] == StreamMode.COMMAND:
             sys.stdout.write("\n")
             sys.stdout.flush()
-            eprint("[woc] 按 Enter 执行，输入 s 跳过，Ctrl+C 取消", C.GREEN)
+            eprint(f"[{alias}] 按 Enter 执行，输入 s 跳过，Ctrl+C 取消", C.GREEN)
         elif state["mode"] == StreamMode.CHAT:
             sys.stdout.write("\n")
             sys.stdout.flush()
 
         try:
             cmd = sanitize(raw)
-        except ChatResponse:
-            messages.append({"role": "assistant", "content": raw})
+        except ChatResponse as chat:
+            messages.append({"role": "assistant", "content": chat.text})
             continue
         except CommandGenError as e:
-            eprint(f"[woc] {e}", C.RED)
+            eprint(f"[{alias}] {e}", C.RED)
             messages.append({"role": "assistant", "content": raw})
             messages.append({
                 "role": "user",
@@ -105,8 +124,25 @@ def wocc_main(argv):
 
         messages.append({"role": "assistant", "content": cmd})
 
+        if is_root_shell(cmd):
+            eprint(f"[{alias}] ⚠️  该命令会打开交互式 root shell，已拒绝：",
+                   C.YELLOW, C.BOLD)
+            eprint(f"  {cmd}", C.YELLOW)
+            messages.append({
+                "role": "user",
+                "content": (
+                    "<exec_result>\n"
+                    "exit_code: 126\n"
+                    "stdout:\n\n"
+                    f"stderr:\n命令会打开交互式 root shell，{alias} 无法在其中继续工作；"
+                    "请改成具体的非交互命令。\n"
+                    "</exec_result>"
+                ),
+            })
+            continue
+
         if is_dangerous(cmd):
-            eprint("[woc] ⚠️  检测到潜在危险命令，已拒绝：", C.YELLOW, C.BOLD)
+            eprint(f"[{alias}] ⚠️  检测到潜在危险命令，已拒绝：", C.YELLOW, C.BOLD)
             eprint(f"  {cmd}", C.YELLOW)
             messages.append({
                 "role": "user",
@@ -124,11 +160,11 @@ def wocc_main(argv):
             ans = interactive_input(prompt="")
 
         except (KeyboardInterrupt, EOFError):
-            eprint("\n[woc] 会话结束", C.GREEN)
+            eprint(f"\n[{alias}] 会话结束", C.GREEN)
             break
 
         if ans.strip().lower() == "s":
-            eprint("[woc] 已跳过", C.YELLOW)
+            eprint(f"[{alias}] 已跳过", C.YELLOW)
             messages.append({
                 "role": "user",
                 "content": (
@@ -141,19 +177,59 @@ def wocc_main(argv):
             })
             continue
 
-        out, err, code = run_command_capture(cmd)
+        shown = False
+        if needs_privilege(cmd):
+            if sudo_ticket_valid():
+                out, err, code = run_command_capture(cmd)
+            elif not sys.stdin.isatty():
+                eprint(f"[{alias}] ⚠️  命令需要 sudo 密码，但当前输入不是终端，已拒绝：",
+                       C.YELLOW, C.BOLD)
+                eprint(f"  {cmd}", C.YELLOW)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "<exec_result>\n"
+                        "exit_code: 126\n"
+                        "stdout:\n\n"
+                        f"stderr:\n需要 sudo 密码，但 {alias} 的输入不是终端。"
+                        "请在终端里直接运行，或先 sudo -v 缓存凭证后重试。\n"
+                        "</exec_result>"
+                    ),
+                })
+                continue
+            elif capture and pty_capture_available():
+                eprint(f"[{alias}] 该命令需要 sudo 权限，正在 pty 中执行并捕获输出"
+                       "（输出会反馈给模型）", C.YELLOW, C.BOLD)
+                out, err, code = run_command_capture_pty(cmd)
+                shown = True
+            else:
+                if capture:
+                    eprint(f"[{alias}] ⚠️  找不到 script，无法捕获输出，改为前台执行",
+                           C.YELLOW, C.BOLD)
+                eprint(f"[{alias}] 该命令需要 sudo 权限，将在本终端前台执行"
+                       "（输出不会反馈给模型）", C.YELLOW, C.BOLD)
+                code, ferr = run_command_foreground(cmd)
+                if ferr:
+                    eprint(f"[{alias}] {ferr}", C.RED)
+                messages.append({
+                    "role": "user",
+                    "content": format_foreground_result(code, ferr),
+                })
+                continue
+        else:
+            out, err, code = run_command_capture(cmd)
 
-        if out:
+        if out and not shown:
             sys.stdout.write(out)
             if not out.endswith("\n"):
                 sys.stdout.write("\n")
-        if err:
+        if err and not shown:
             sys.stderr.write(err)
             if not err.endswith("\n"):
                 sys.stderr.write("\n")
 
         if code != 0:
-            eprint(f"[woc] exit_code={code}", C.RED)
+            eprint(f"[{alias}] exit_code={code}", C.RED)
 
         messages.append({
             "role": "user",

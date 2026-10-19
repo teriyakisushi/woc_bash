@@ -1,36 +1,43 @@
 import os
 import sys
 
-from ..colors import C, cerr, interactive_input
-from ..config import load_config
+from ..colors import C, cerr, eprint, interactive_input
+from ..config import load_config, prefix
 from ..llm import LLMError, call_llm_messages_stream
 from ..markdown import render_markdown
+from ..sanitize import strip_dsml
 
-CHAT_SYSTEM_PROMPT = """You are woc_chat, a helpful terminal assistant.
+CHAT_SYSTEM_PROMPT = """You are {name}, a helpful terminal assistant.
 Answer the user's questions in their language. Use Markdown when it improves
 readability. The current working directory is included as context. Do not
 pretend that you can inspect files unless their contents are provided.
 """
 
 
-def woc_chat_main(argv=None):
+def woc_chat_main(argv=None, name=None, via_woc=False):
     argv = argv or []
+    cfg = load_config()
+    name = name or prefix(cfg, "woc_chat_prefix")
+    alias = prefix(cfg, "alias")
     if argv and argv[0] in ("-h", "--help"):
-        print("用法: woc -c [首轮问题]")
+        if via_woc:
+            print(f"用法: {name} -c [首轮问题]")
+        else:
+            print(f"用法: {name} [首轮问题]")
+            print(f"也可以由 {prefix(cfg, 'woc_prefix')} -c 启动。")
         print("进入支持 Markdown 渲染的多轮聊天。输入 :q / exit / quit 退出。")
         raise SystemExit(0)
 
-    cfg = load_config()
     cwd = os.getcwd()
     messages = [
-        {"role": "system", "content": CHAT_SYSTEM_PROMPT},
+        {"role": "system", "content": CHAT_SYSTEM_PROMPT.replace("{name}", alias)},
         {"role": "system", "content": f"Current working directory: {cwd}"},
     ]
     pending = " ".join(argv) if argv else None
     colors = C(sys.stdout)
 
-    cerr("[woc_chat] 已进入聊天模式", C.GREEN, C.BOLD)
-    cerr("[woc_chat] 输入 :q 退出", C.GREEN)
+    eprint(f"[{alias}] 已进入聊天，当前目录: {cwd}", C.GREEN, C.BOLD)
+    eprint(f"[{alias}] 输入 :q 退出", C.GREEN)
     while True:
         if pending is not None:
             question = pending
@@ -42,13 +49,13 @@ def woc_chat_main(argv=None):
                     cerr("[user] ", C.MAGENTA, C.BOLD)
                 ).strip()
             except (KeyboardInterrupt, EOFError):
-                cerr("\n[woc_chat] 会话结束", C.GREEN)
+                eprint(f"\n[{alias}] 会话结束", C.GREEN)
                 return
 
         if not question:
             continue
         if question in (":q", "exit", "quit"):
-            cerr("[woc_chat] 会话结束", C.GREEN)
+            eprint(f"[{alias}] 会话结束", C.GREEN)
             return
 
         messages.append({"role": "user", "content": question})
@@ -61,13 +68,13 @@ def woc_chat_main(argv=None):
             )
         except LLMError as exc:
             messages.pop()
-            cerr(f"[woc_chat] LLM 调用失败: {exc}", C.RED)
+            eprint(f"[{alias}] LLM 调用失败: {exc}", C.RED)
             continue
 
-        answer = "".join(chunks)
+        answer = strip_dsml("".join(chunks))
         if not answer:
             messages.pop()
-            cerr("[woc_chat] LLM 未返回内容", C.RED)
+            eprint(f"[{alias}] LLM 未返回内容", C.RED)
             continue
         print(render_markdown(answer, colors))
         print()
