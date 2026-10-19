@@ -80,7 +80,10 @@ Rules (STRICT):
 4. Ground every claim in the data: quote the relevant lines or keys. If the answer is not in
    the data, say so instead of inventing it.
 5. If the data is marked truncated, say what is visible and note that the rest is missing.
-6. Do not ask for permission and do not output a plan. Answer the question.
+6. The <stdin> block may carry a format attribute (format="diff" or format="json");
+   use it to interpret the data.
+7. When quoting data, quote the text itself. Never invent line numbers.
+8. Do not ask for permission and do not output a plan. Answer the question.
 """
 
 MULTI_TURN_HINT = """You are now in a multi-turn interactive session.

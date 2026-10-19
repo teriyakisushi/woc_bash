@@ -265,3 +265,90 @@ class ConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SplitMaxCharsTest(unittest.TestCase):
+    def test_separate_form(self):
+        args, override = P.split_max_chars(["--max-chars", "500", "看看"])
+        self.assertEqual(args, ["看看"])
+        self.assertEqual(override, 500)
+
+    def test_equals_form(self):
+        args, override = P.split_max_chars(["--max-chars=500", "看看"])
+        self.assertEqual(args, ["看看"])
+        self.assertEqual(override, 500)
+
+    def test_absent(self):
+        args, override = P.split_max_chars(["看看", "日志"])
+        self.assertEqual(args, ["看看", "日志"])
+        self.assertIsNone(override)
+
+    def test_invalid_values_raise(self):
+        for argv in (["--max-chars", "abc"], ["--max-chars", "0"],
+                     ["--max-chars=,", "--max-chars"], ["--max-chars"]):
+            with self.assertRaises(ValueError):
+                P.split_max_chars(argv)
+
+
+class DetectFormatTest(unittest.TestCase):
+    def test_git_diff(self):
+        text = ("diff --git a/x.py b/x.py\nindex 111..222 100644\n"
+                "--- a/x.py\n+++ b/x.py\n@@ -1,3 +1,3 @@\n-a\n+b\n")
+        self.assertEqual(P.detect_format(text), "diff")
+
+    def test_hunk_header_only(self):
+        self.assertEqual(P.detect_format("@@ -1,2 +3,4 @@\n-a\n+b\n"), "diff")
+
+    def test_json_object(self):
+        self.assertEqual(P.detect_format('{"a": 1}'), "json")
+
+    def test_json_array(self):
+        self.assertEqual(P.detect_format("[1, 2, 3]"), "json")
+
+    def test_plain_log_is_not_guessed(self):
+        self.assertEqual(P.detect_format("2026-10-19 09:00:01 INFO hi\n"), "")
+
+    def test_broken_json_falls_back_to_unknown(self):
+        self.assertEqual(P.detect_format('{"a": '), "")
+
+
+class FormatAttributeTest(unittest.TestCase):
+    def test_format_goes_into_block(self):
+        messages = P.build_pipe_messages("q", "{}", fmt="json")
+        self.assertIn('<stdin format="json">', messages[2]["content"])
+
+    def test_no_format_no_attribute(self):
+        messages = P.build_pipe_messages("q", "text")
+        self.assertEqual(messages[2]["content"].splitlines()[0], "<stdin>")
+
+    def test_truncated_and_format_together(self):
+        messages = P.build_pipe_messages("q", "x", truncated=True, fmt="diff")
+        head = messages[2]["content"].splitlines()[0]
+        self.assertIn('truncated="true"', head)
+        self.assertIn('format="diff"', head)
+
+
+class MaxCharsOverrideTest(unittest.TestCase):
+    def test_override_truncates(self):
+        with PipeHarness(raw=("y" * 500).encode()) as harness:
+            code = P.run_pipe_mode(["--max-chars", "20", "q"], CFG)
+        self.assertEqual(code, 0)
+        self.assertIn("输入超过 20 字符", harness.stderr.getvalue())
+        self.assertIn("已截断", harness.messages[0][2]["content"])
+
+    def test_override_equals_form(self):
+        with PipeHarness(raw=("y" * 500).encode()) as harness:
+            self.assertEqual(P.run_pipe_mode(["--max-chars=30", "q"], CFG), 0)
+        self.assertIn("输入超过 30 字符", harness.stderr.getvalue())
+
+    def test_invalid_override_exits_2(self):
+        with PipeHarness(raw=b"data") as harness:
+            self.assertEqual(P.run_pipe_mode(["--max-chars", "abc", "q"], CFG), 2)
+        self.assertIn("正整数", harness.stderr.getvalue())
+
+    def test_override_cannot_exceed_budget(self):
+        # budget 下限是 MIN_INPUT_CHARS(1000)，--max-chars 再大叫也越不过去
+        cfg = dict(CFG, budget={"max_input_chars": 50})
+        with PipeHarness(raw=("y" * 5000).encode()) as harness:
+            self.assertEqual(P.run_pipe_mode(["--max-chars", "9999", "q"], cfg), 0)
+        self.assertIn("输入超过 1000 字符", harness.stderr.getvalue())

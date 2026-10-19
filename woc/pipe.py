@@ -13,6 +13,7 @@
 """
 
 import codecs
+import json
 import os
 import re
 import sys
@@ -43,6 +44,61 @@ DEFAULT_QUESTION = (
 
 class PipeInputError(Exception):
     """stdin 不能当作给模型看的文本。"""
+
+
+_DIFF_GIT_RE = re.compile(r"^diff --git ")
+_DIFF_HUNK_RE = re.compile(r"^@@ -[0-9]")
+
+
+def detect_format(text):
+    """尽力识别输入格式，作为提示交给模型（识别不了就返回空串）。
+
+    只认两种无歧义的：unified diff 和 JSON。日志/文本的启发式太容易误判，
+    宁可不说，也不给模型错误先验。
+    """
+    head = text[:4000]
+    for line in head.splitlines():
+        if _DIFF_GIT_RE.match(line) or _DIFF_HUNK_RE.match(line):
+            return "diff"
+    if head.lstrip()[:1] in ("{", "["):
+        try:
+            json.loads(text)
+        except ValueError:
+            return ""
+        return "json"
+    return ""
+
+
+def split_max_chars(argv):
+    """摘出 `--max-chars N` / `--max-chars=N`，返回 (剩余参数, 覆盖值)。"""
+    args = []
+    override = None
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item == "--max-chars":
+            if index + 1 >= len(argv):
+                raise ValueError("--max-chars 需要一个正整数")
+            override = _positive_int(argv[index + 1])
+            index += 2
+            continue
+        if item.startswith("--max-chars="):
+            override = _positive_int(item.split("=", 1)[1])
+            index += 1
+            continue
+        args.append(item)
+        index += 1
+    return args, override
+
+
+def _positive_int(raw):
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError("--max-chars 需要一个正整数: %r" % (raw,))
+    if value <= 0:
+        raise ValueError("--max-chars 需要一个正整数: %r" % (raw,))
+    return value
 
 
 def truncate_middle(text, limit):
@@ -101,13 +157,16 @@ def read_stdin(max_chars):
     return text, False
 
 
-def render_stdin_block(text, truncated):
+def render_stdin_block(text, truncated, fmt=""):
     """把数据包成 <stdin> 块：模型靠标签知道“这是数据，不是指令”。"""
     attrs = ' truncated="true"' if truncated else ""
+    if fmt:
+        attrs += f' format="{fmt}"'
     return f"<stdin{attrs}>\n{text}\n</stdin>"
 
 
-def build_pipe_messages(question, data, truncated=False, alias="woc", cwd=None):
+def build_pipe_messages(question, data, truncated=False, alias="woc",
+                        cwd=None, fmt=""):
     """管道模式的消息：稳定 system 前缀 + 一段数据 + 问题。
 
     `<environment>` 里那句“命令执行前会有人工确认”在管道模式下不成立，
@@ -119,7 +178,7 @@ def build_pipe_messages(question, data, truncated=False, alias="woc", cwd=None):
         {"role": "system",
          "content": render_environment(cwd=cwd, confirm_hint=False)},
         {"role": "user",
-         "content": render_stdin_block(data, truncated) + "\n\n" + question},
+         "content": render_stdin_block(data, truncated, fmt) + "\\n\\n" + question},
     ]
 
 
@@ -146,12 +205,19 @@ def run_pipe_mode(argv, cfg):
     """执行一次管道问答，返回退出码（不抛 SystemExit，由调用方决定）。"""
     alias = prefix(cfg, "alias")
     name = prefix(cfg, "woc_prefix")
-    question = " ".join(argv).strip() or DEFAULT_QUESTION
+    try:
+        args, override = split_max_chars(argv)
+    except ValueError as exc:
+        eprint(f"[{alias}] {exc}", C.RED)
+        return 2
+    question = " ".join(args).strip() or DEFAULT_QUESTION
     # system 段是要预留的：预算算的是"还能塞多少数据"，不是总量。
     reserved = (len(PIPE_SYSTEM_PROMPT)
                 + len(render_environment(confirm_hint=False)))
-    max_chars = pipe_max_chars(cfg, reserved_chars=reserved)
-    debug.log("pipe: max_chars=%d reserved=%d chars" % (max_chars, reserved))
+    limit = pipe_max_chars(cfg, reserved_chars=reserved)
+    max_chars = min(override, limit) if override is not None else limit
+    debug.log("pipe: max_chars=%d (budget=%d override=%s) reserved=%d chars"
+              % (max_chars, limit, override, reserved))
 
     try:
         data, truncated = read_stdin(max_chars)
@@ -161,7 +227,9 @@ def run_pipe_mode(argv, cfg):
     except PipeInputError as exc:
         eprint(f"[{alias}] {exc}。", C.RED)
         return 2
-    debug.log("pipe: stdin=%d chars truncated=%s" % (len(data), truncated))
+    fmt = detect_format(data)
+    debug.log("pipe: stdin=%d chars truncated=%s format=%s"
+              % (len(data), truncated, fmt or "text"))
     if truncated:
         eprint(f"[{alias}] 输入超过 {max_chars} 字符，已截断（只分析保留的部分）",
                C.YELLOW)
@@ -171,7 +239,7 @@ def run_pipe_mode(argv, cfg):
         return 2
 
     messages = build_pipe_messages(question, data, truncated=truncated,
-                                   alias=alias)
+                                   alias=alias, fmt=fmt)
     state = {"started": False}
     spin = Spinner(f"[{alias}] Thinking", enabled=spinner_enabled(cfg))
 

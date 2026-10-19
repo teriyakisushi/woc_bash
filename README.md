@@ -388,6 +388,7 @@ journalctl -p err -n 200 | woc "归纳一下根因"
 git diff | woc "review 这段改动"
 kubectl get pods | woc "哪些 pod 不正常"
 cat err.log | woc              # 没给问题时走内置的“排查/总结”指令
+git diff | woc --max-chars 8000 "这段改动有什么风险"   # 单次覆盖输入上限
 ```
 
 标准输入不是终端时自动进入管道模式：把 stdin 包成 `<stdin>` 块交给模型，
@@ -396,8 +397,11 @@ cat err.log | woc              # 没给问题时走内置的“排查/总结”�
 可以继续 `| less` 或 `> out.md`。
 
 - 不注入 `<templates>`：那是命令参考，对"分析日志"只是噪音；
-- 输入上限由 `[pipe] max_chars` 控制（默认 32000 字符）；超出时保留头 60% + 尾 40%，
-  并在给模型的内容里显式标注"已截断"；
+- 输入上限跟随 `[budget] max_input_chars`（默认 32000 字符），可用 `[pipe] max_chars`
+  或单次 `--max-chars N` 覆盖；任何覆盖都会被上下文预算夹住。超出时保留头 60% +
+  尾 40%，并在给模型的内容里显式标注"已截断"；
+- 自动识别 unified diff 和 JSON，在 `<stdin>` 上标 `format="diff"` / `format="json"`，
+  帮模型少猜一层；识别不了就不标，不给错误先验；
 - 含 NUL 字节的二进制输入直接拒绝；ANSI 颜色会被剥掉；
 - 和 `grep` 一样读到 EOF 才发请求：`tail -f` 这类不会结束的命令需要 `Ctrl+C` 取消；
 - 用 `[pipe] enabled = false` 关掉本模式后，非终端输入退回"无法确认执行"的拒绝。
@@ -405,7 +409,7 @@ cat err.log | woc              # 没给问题时走内置的“排查/总结”�
 ```toml
 [pipe]
 enabled = true
-max_chars = 32000
+# max_chars = 32000     # 可选：默认跟随 budget.max_input_chars
 ```
 
 对应环境变量 `WOC_PIPE=0` / `WOC_PIPE_MAX_CHARS=...`。
