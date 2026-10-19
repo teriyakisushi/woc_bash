@@ -9,6 +9,7 @@
 
 import re
 import sys
+import time
 
 from . import debug
 from .colors import C, cout, eprint, interactive_input, read_key
@@ -19,6 +20,7 @@ from .exec import (format_exec_result, format_foreground_result, needs_privilege
                    run_command_capture_pty, run_command_foreground,
                    sudo_ticket_valid, syntax_error)
 from .llm import LLMError, StreamMode, call_llm_messages
+from .prompts import EXPLAIN_SYSTEM_PROMPT
 from .sanitize import (ChatResponse, CommandGenError, dangerous_reason,
                        has_toolcall, is_dangerous, is_root_shell, sanitize,
                        strip_dsml)
@@ -49,7 +51,10 @@ FOLD_HEAD = 15
 FOLD_TAIL = 8
 
 # 上一条命令与完整输出，供 `:more` 重新展开。
-_LAST = {"command": "", "output": ""}
+_LAST = {"command": "", "output": "", "stderr": "", "code": None}
+
+# 本回合执行过的步骤，供 `:steps` 审计。每个用户回合开始时清空。
+_STEPS = []
 
 # 中文正文出现在"命令"里，通常意味着模型漏了 #CHAT: 标记。
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
@@ -145,6 +150,92 @@ def expand_last_output():
 
 def last_command():
     return _LAST["command"]
+
+
+def export_last():
+    """导出上一条命令与输出，供会话落盘。"""
+    return dict(_LAST)
+
+
+def restore_last(data):
+    """恢复上一条命令与输出（`--last-session`），让 :last/:more/:explain 继续可用。"""
+    if not isinstance(data, dict):
+        return
+    for key in ("command", "output", "stderr"):
+        value = data.get(key)
+        if isinstance(value, str):
+            _LAST[key] = value
+    code = data.get("code")
+    if code is None or isinstance(code, int):
+        _LAST["code"] = code
+
+
+def show_steps(alias):
+    """打印本回合的步骤审计（`:steps`）。返回是否有内容。"""
+    if not _STEPS:
+        eprint(f"[{alias}] 本回合还没有执行过命令", C.YELLOW)
+        return False
+    eprint(f"[{alias}] 本回合 {len(_STEPS)} 步：", C.GREEN, C.BOLD)
+    for item in _STEPS:
+        status = item["status"]
+        if status == "run":
+            label = "%s  %.2fs" % (item.get("code", "?"),
+                                    item.get("ms", 0) / 1000.0)
+        else:
+            label = {"skip": "跳过", "deny": "拒绝",
+                     "syntax": "语法错误"}.get(status, status)
+        eprint(f"  {item['step']}. [{label}] {item['cmd'][:140]}", C.GRAY)
+    return True
+
+
+EXPLAIN_OUTPUT_CHARS = 8000
+
+
+def explain_last(alias, cfg):
+    """解释上一条命令与输出（`:explain`）。只读请求，不改变会话历史。"""
+    command = _LAST["command"]
+    if not command:
+        eprint(f"[{alias}] 还没有执行过命令", C.YELLOW)
+        return False
+    stdout = _LAST["output"][:EXPLAIN_OUTPUT_CHARS] or "(无 stdout)"
+    stderr = _LAST["stderr"][:EXPLAIN_OUTPUT_CHARS] or "(无 stderr)"
+    block = (
+        "<command>\n%s\n</command>\n"
+        "<exit_code>%s</exit_code>\n"
+        "<stdout>\n%s\n</stdout>\n"
+        "<stderr>\n%s\n</stderr>\n\n"
+        "请解释这条命令做了什么，以及输出说明了什么。"
+        % (command, _LAST["code"], stdout, stderr)
+    )
+    messages = [
+        {"role": "system",
+         "content": EXPLAIN_SYSTEM_PROMPT.replace("{name}", alias)},
+        {"role": "user", "content": block},
+    ]
+    state = {"started": False, "tail": ""}
+    spin = Spinner(f"[{alias}] Thinking", enabled=spinner_enabled(cfg))
+
+    def on_chunk(text):
+        if not state["started"]:
+            state["started"] = True
+            spin.stop()
+            sys.stdout.write("\n")
+        state["tail"] = text[-1:]
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    spin.start()
+    try:
+        call_llm_messages(messages, cfg, on_chunk=on_chunk)
+    except LLMError as exc:
+        eprint(f"[{alias}] {exc}", C.RED)
+        return False
+    finally:
+        spin.stop()
+    if not state["started"] or state["tail"] != "\n":
+        sys.stdout.write("\n")
+    sys.stdout.flush()
+    return True
 
 
 def _ask(messages, cfg, alias, spinner=False, step=None, max_steps=None):
@@ -247,6 +338,7 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
     loop 开启后采用"粘性续步"：本回合一旦出现过 #STEP:，后面的裸命令也算一步，
     只有 #CHAT: / #ERROR: 结束回合；从未用过 #STEP: 的单命令回合仍是一次请求结束。
     """
+    _STEPS.clear()
     max_steps, total_chars, auto_safe = _limits(cfg, loop_enabled)
     show_spinner = spinner_enabled(cfg)
     check_syntax = syntax_check_enabled(cfg)
@@ -300,6 +392,7 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
         # 和 #CHAT: 同理：历史里保留 #STEP:，否则模型会慢慢退回"裸命令"格式。
         assistant_content = (STEP_MARKER + " " + cmd) if step_mode else cmd
         messages.append({"role": "assistant", "content": assistant_content})
+        record = {"step": step, "cmd": cmd, "status": "run"}
 
         if is_root_shell(cmd):
             block = _rejected(
@@ -308,6 +401,8 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                 f"命令会打开交互式 root shell，{alias} 无法在其中继续工作；"
                 "请改成具体的非交互命令。",
             )
+            record["status"] = "deny"
+            _STEPS.append(record)
             messages.append({"role": "user", "content": block})
             if step_mode or multi_step:
                 continue
@@ -317,6 +412,8 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
         if debug.enabled():
             debug.log("step %d/%d: tier=%s cmd=%r" % (step, max_steps, tier, cmd[:80]))
         if tier == "deny":
+            record["status"] = "deny"
+            _STEPS.append(record)
             reason = dangerous_reason(cmd) or "命中安全策略"
             block = _rejected(
                 alias, cmd,
@@ -337,6 +434,8 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
             error = syntax_error(cmd)
             if error:
                 detail = "\n".join(error.strip().splitlines()[-2:])[:500]
+                record["status"] = "syntax"
+                _STEPS.append(record)
                 eprint(f"[{alias}] 命令语法错误，未执行：", C.YELLOW, C.BOLD)
                 eprint(f"  {cmd[:200]}", C.YELLOW)
                 messages.append({
@@ -383,6 +482,8 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                                 STEP_MARKER + " " + cmd) if step_mode else cmd
                             action = "run"
             if action == "skip":
+                record["status"] = "skip"
+                _STEPS.append(record)
                 eprint(f"[{alias}] 已跳过", C.YELLOW)
                 messages.append({
                     "role": "user",
@@ -399,10 +500,16 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
         run_label = (f"[{alias}] Step {step}/{max_steps} - Running"
                      if (step_mode or multi_step) and max_steps > 1
                      else f"[{alias}] Running")
+        started = time.monotonic()
         result, out, err, code, shown = _execute(
             cmd, alias, capture, spinner=show_spinner, label=run_label)
+        record["code"] = code
+        record["ms"] = int((time.monotonic() - started) * 1000)
+        _STEPS.append(record)
         _LAST["command"] = cmd
         _LAST["output"] = out
+        _LAST["stderr"] = err
+        _LAST["code"] = code
         if not shown:
             _print_output(out, err, code, alias)
         if code != 0:

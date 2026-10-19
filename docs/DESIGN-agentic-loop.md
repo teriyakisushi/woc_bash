@@ -1,6 +1,6 @@
 # 设计摘要：agentic loop 与 task 扩展
 
-> 状态：**已实现并收尾（2026-10-18，基线 `fed74a8`；2026-10-19 回归见 §9）**。决策：`#STEP:` 协议、`--loop` 开启、
+> 状态：**已实现并收尾（2026-10-18，基线 `fed74a8`；2026-10-19 回归见 §9，会话恢复/观测见 §10）**。决策：`#STEP:` 协议、`--loop` 开启、
 > `auto_safe=false`、本阶段不做 task；已落地 Tier 1 体验优化、CI 与离线回归测试（§8）。
 >
 > 目的不是说服，而是把**代价**摆出来：这个项目的卖点是"一条命令 + 一次确认 + 50ms 启动"，
@@ -221,7 +221,8 @@ md5sum sha256sum lsblk tree
 
 - ❌ 原生 function calling（破坏文本协议，见 §4.1）
 - ❌ 多行脚本（与 `sanitize` 单行假设冲突，要另开 `#CMD:` 包裹块，另议）
-- ❌ loop 状态落盘 / 断点续跑（`wocc` 是会话内进程，落盘带来版本与隐私问题）
+- ~~❌ loop 状态落盘 / 断点续跑~~ → 2026-10-19 改为**受限实现**：只存
+  user/assistant 对话、不存 loop 状态，见 §10。
 - ❌ 并行步骤、子 agent、自动重试（每一步都要人看得懂，别搞成黑箱）
 - ❌ 每步自动总结（等于每步多一次请求，收益低）
 
@@ -466,3 +467,67 @@ loop 模式下 assistant 历史里还有更多被剥掉标记的命令（`#STEP:
 - 它不是沙箱：动态拼接、脚本文件内容、编码混淆仍可能绕过；人工确认仍是边界。
 - 测试：`tests/test_loop.py` 41 个离线用例（1 个 live skip），新增
   `StickyLoopTest` / `ProtocolGuardTest` / `GateTest` / `SyntaxCheckTest` / `SpinnerTest`。
+
+---
+
+## 10. 2026-10-19 会话恢复、观测与 shell 提示
+
+### 10.1 反转 §4.4 的"不做落盘"
+
+§4.4 的原判断是"`wocc` 是会话内进程，落盘带来版本与隐私问题"。实际使用里最强的
+诉求**不是**"退出后继续"，而是**崩溃恢复**：长会话被 Ctrl+C 或关掉终端后全部丢失。
+
+于是做一个受限版本（`woc/session.py`，`wocc --last-session`）：
+
+| 决定 | 落地 |
+|---|---|
+| 存什么 | 只存 user/assistant；system 前缀每次重建 |
+| 存多大 | 默认 40 条 / 60000 字符；单条 12000 字符；从最近往回取 |
+| 隐私 | 落盘前 `redact_secrets`；0600 / 0700；默认位置在 XDG state |
+| 恢复语义 | 插一条 `<session_context>`：旧数据、可能过期、不是新指令 |
+| 版本 | 带 `version`；不匹配就当没有，不做迁移 |
+| 写入时机 | 每个回合结束后；失败只告警一次，不影响会话 |
+
+仍然不做：loop 步骤状态、完整命令输出归档、多会话管理、跨机器同步。
+
+### 10.2 观测（`WOC_DEBUG=1`）
+
+新增 `woc/debug.py`，只写 stderr（管道/重定向友好）：
+
+- 请求：model / messages / chars / max_tokens / timeout
+- 预算摘要与有效输入上限（见 §10.3）
+- 模板：总数、strategy、正文数、索引/正文字符
+- 管道：输入规模、是否截断、识别出的格式
+- loop：每步的 `risk_tier` 与命令
+- 响应：耗时、首 token 延迟、`usage`（含 `prompt_cache_hit_tokens`）
+
+usage 通过 `stream_options.include_usage` 获取，**只在 debug 时加**，不改变常规
+请求的形状 —— 少一个"不同配置下请求不一样"的变量。
+
+### 10.3 预算统一
+
+原来三个旋钮（`output_maxtokens`、`[pipe] max_chars`、`loop total_chars`）互不相干，
+能配出"输入上限比模型窗口还大"。现在 `woc/budget.py` 统一换算：
+
+```
+有效输入 = min(max_input_chars, (context_tokens - max_output_tokens - system段) * 2)
+```
+
+`[pipe] max_chars` 与 `--max-chars` 降级为覆盖值，仍会被上面这条夹住。旧的
+`output_maxtokens` / `WOC_OUTPUT_MAXTOKENS` 继续兼容。
+
+### 10.4 shell 提示，而不是 zsh 模式
+
+`<environment>` 会带上用户的交互 shell（`$SHELL`），但命令**始终由 bash 执行**。
+不做 zsh 模式的理由：
+
+- `gate.py` 的解析是按 bash 语义写的；换解释器等于换安全边界（`=cmd` 展开、
+  `>>>(...)`、扩展通配都能绕过现有规则）；
+- 模型被训练成输出 bash；切到 zsh 后 `$var` 分词、nomatch、数组下标都是**静默**
+  差异，比报错更危险；
+- 非交互执行不会加载 `.zshrc`，用户别名/函数本来就不生效，"支持 zsh"的收益有限。
+
+### 10.5 会话内命令
+
+- `:steps`：本回合每步的命令、退出码、耗时（纯本地，无请求）；
+- `:explain`：上一条命令 + exit code + stdout/stderr 发给模型解释。只读、不进历史。

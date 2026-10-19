@@ -563,6 +563,12 @@ def render_listing(cwd=None, max_lines=LS_MAX_LINES, max_chars=LS_MAX_CHARS):
     ])
 
 
+def detect_user_shell():
+    """用户的交互 shell 名（来自 $SHELL）；拿不到就按 bash 处理。"""
+    raw = os.environ.get("SHELL", "")
+    return os.path.basename(raw.strip()) or "bash"
+
+
 def render_environment(cwd=None, platform=None, facts=None, confirm_hint=True):
     """dynamic 段：只放会变的环境事实，必须排在 stable 段之后。
 
@@ -578,6 +584,11 @@ def render_environment(cwd=None, platform=None, facts=None, confirm_hint=True):
         f"current working directory: {cwd}",
         f"platform: {platform} (shell: bash)",
     ]
+    shell = detect_user_shell()
+    if shell != "bash":
+        lines.append(
+            f"用户的交互 shell 是 {shell}，但命令由 woc 用 bash 执行；"
+            "zsh/fish 专有写法需要改写成 bash 兼容形式。")
     lines.extend(facts if facts is not None else _static_facts())
     if confirm_hint:
         lines.append("用户在终端里，命令执行前会有人工确认。")

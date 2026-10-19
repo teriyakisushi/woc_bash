@@ -46,6 +46,9 @@ PIPE_DEFAULTS = {"enabled": True, "max_chars": None}
 # [debug] 段：把 usage、前缀规模、输入规模等观测信息打到 stderr。
 DEBUG_DEFAULTS = {"enabled": False}
 
+# [session] 段：wocc 会话落盘，供 --last-session 恢复。
+SESSION_DEFAULTS = {"persist": True, "max_messages": 40, "max_chars": 60000}
+
 
 def _to_bool(value):
     return str(value).strip().lower() not in ("", "0", "false", "no", "off")
@@ -136,6 +139,25 @@ def spinner(cfg):
     return bool((cfg.get("ui") or {}).get("spinner", UI_DEFAULTS["spinner"]))
 
 
+def session_settings(cfg):
+    """wocc 会话持久化设置（[session]）。坏值一律回落到默认值。"""
+    settings = cfg.get("session") or {}
+
+    def positive(key):
+        try:
+            value = int(settings.get(key, SESSION_DEFAULTS[key]))
+        except (TypeError, ValueError):
+            return SESSION_DEFAULTS[key]
+        return value if value > 0 else SESSION_DEFAULTS[key]
+
+    return {
+        "persist": bool(settings.get("persist",
+                                    SESSION_DEFAULTS["persist"])),
+        "max_messages": positive("max_messages"),
+        "max_chars": positive("max_chars"),
+    }
+
+
 def pipe_enabled(cfg):
     """标准输入不是终端时，是否把 stdin 当数据问答（[pipe] enabled）。"""
     return bool((cfg.get("pipe") or {}).get("enabled", PIPE_DEFAULTS["enabled"]))
@@ -196,6 +218,11 @@ def load_config(path=None):
         [debug]
         enabled = false
 
+        [session]
+        persist = true
+        max_messages = 40
+        max_chars = 60000
+
     根级 output_maxtokens 是 [budget] max_output_tokens 的旧名字，仍然可用。
     """
     notes = []
@@ -221,6 +248,16 @@ def load_config(path=None):
         },
         "debug": {
             "enabled": _env_bool("WOC_DEBUG", DEBUG_DEFAULTS["enabled"]),
+        },
+        "session": {
+            "persist": _env_bool("WOC_SESSION_PERSIST",
+                                 SESSION_DEFAULTS["persist"]),
+            "max_messages": _env_positive_int(
+                "WOC_SESSION_MAX_MESSAGES",
+                SESSION_DEFAULTS["max_messages"], notes),
+            "max_chars": _env_positive_int(
+                "WOC_SESSION_MAX_CHARS",
+                SESSION_DEFAULTS["max_chars"], notes),
         },
         "prefix": dict(PREFIX_DEFAULTS),
         "sudo": {"capture_output": _env_bool("WOC_CAPTURE_SUDO", False)},
@@ -313,6 +350,20 @@ def load_config(path=None):
                         cfg["budget"]["max_input_chars"] = _file_positive_int(
                             value, budget.MAX_INPUT_CHARS, notes,
                             "budget.max_input_chars")
+                    continue
+                if section == "session":
+                    if key == "persist" and "WOC_SESSION_PERSIST" not in os.environ:
+                        cfg["session"]["persist"] = _to_bool(value)
+                    elif (key == "max_messages"
+                          and "WOC_SESSION_MAX_MESSAGES" not in os.environ):
+                        cfg["session"]["max_messages"] = _file_positive_int(
+                            value, SESSION_DEFAULTS["max_messages"], notes,
+                            "session.max_messages")
+                    elif (key == "max_chars"
+                          and "WOC_SESSION_MAX_CHARS" not in os.environ):
+                        cfg["session"]["max_chars"] = _file_positive_int(
+                            value, SESSION_DEFAULTS["max_chars"], notes,
+                            "session.max_chars")
                     continue
                 if section == "debug":
                     if key == "enabled" and "WOC_DEBUG" not in os.environ:

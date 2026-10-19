@@ -14,6 +14,8 @@ Shell 命令，也可以回答问题、执行命令并在多轮会话中继续�
 - 等待模型/执行命令时显示一行 loading；仅在终端生效，可用 `[ui] spinner` 关闭。
 - 管道模式：`dmesg | woc "分析一下"` 把标准输入当数据，只回答、不执行。
 - `WOC_DEBUG=1` 可观测 usage、前缀缓存命中与每次请求的规模。
+- 会话内可用 `:steps` 审计本回合步骤、`:explain` 解释上一条命令；
+  `wocc --last-session` 能接回上一次会话。
 
 ## 环境要求
 
@@ -69,6 +71,9 @@ export WOC_PIPE_MAX_CHARS="32000"   # 等价于 [pipe] max_chars
 export WOC_MAX_INPUT_CHARS="32000"  # 等价于 [budget] max_input_chars
 export WOC_CONTEXT_TOKENS="64000"   # 等价于 [budget] context_tokens
 export WOC_DEBUG="1"                # 等价于 [debug] enabled = true
+export WOC_SESSION_PERSIST="0"      # 等价于 [session] persist = false
+export WOC_SESSION_MAX_MESSAGES="40"
+export WOC_SESSION_MAX_CHARS="60000"
 ```
 
 ### 配置文件
@@ -116,6 +121,11 @@ max_input_chars = 32000    # 单次输入（管道数据）上限
 
 [debug]
 enabled = false
+
+[session]
+persist = true
+max_messages = 40
+max_chars = 60000
 ```
 
 环境变量优先于配置文件。默认 API Base 是
@@ -203,6 +213,8 @@ wocc --capture-sudo
 - `wocc` 只在**启动时生成一次**，随后作为会话前缀的一部分每轮复用（不会重复执行 `ls`）；
 - `woc_chat` 不注入。
 
+`<environment>` 里还会带上用户的交互 shell（`$SHELL`）；命令始终由 `woc` 用 bash
+执行，zsh/fish 专有写法由模型负责转换。
 快照可能过期，注入文本里已明确要求模型不要硬编码文件名、需要准确结果时重新生成命令；
 输出最多 200 行 / 4000 字符，超出会标注「已截断」。对应环境变量 `WOC_CONTEXT_LS=1`。
 
@@ -437,6 +449,8 @@ wocc
 ```
 
 输入 `:q`、`exit` 或 `quit` 退出。命令执行结果会自动加入下一轮上下文。
+`:steps` 打印本回合每一步的命令、退出码与耗时；`:explain` 把上一条命令与输出
+发给模型解释（只发一次请求，不执行任何东西，也不进会话历史）。
 
 命令生成后：
 
@@ -459,6 +473,37 @@ wocc 帮我看看当前运行中的进程
 ```bash
 wocc --loop
 ```
+
+想接着上一次会话继续：
+
+```bash
+wocc --last-session
+```
+
+### 会话恢复（`--last-session`）
+
+`wocc` 每个回合结束后会把对话写到 `$XDG_STATE_HOME/woc/sessions/last.json`
+（默认 `~/.local/state/woc/sessions/last.json`，权限 0600）。下次用
+`wocc --last-session` 启动时会把它接回来，从上次的上下文继续。
+
+- **只回放 user/assistant**：system prompt、模板、`<environment>` 每次按当前环境
+  重建，所以换目录、改配置、更新模板之后仍然自洽；
+- 载入时从最近的消息往回取，默认最多 40 条 / 60000 字符，并保证第一条是 user；
+- 历史前面会插一条 `<session_context>`，明确告诉模型"这是旧会话，可能已过期，
+  需要准确结果时重新执行命令"；
+- 落盘前脱敏（`password=` / `token=` / `api_key=` 这类字段），单条消息上限 12000 字符；
+- 默认开启；`[session] persist = false`（或 `WOC_SESSION_PERSIST=0`）关闭写入。
+  关闭后 `--last-session` 仍能读旧文件，但不会再产生新文件。
+
+```toml
+[session]
+persist = true
+max_messages = 40
+max_chars = 60000
+```
+
+它解决的主要是**崩溃恢复**（长会话被 Ctrl+C 或关掉终端），不是多会话管理：
+只有一个 `last.json`，多开 `wocc` 时后保存的覆盖先保存的。
 
 ### 聊天模式
 

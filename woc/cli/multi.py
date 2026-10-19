@@ -1,11 +1,14 @@
 import sys
 
+from .. import session
 from ..colors import C, cerr, eprint, interactive_input
-from ..config import capture_sudo, load_config, ls_on_start, prefix
+from ..config import (capture_sudo, load_config, ls_on_start, prefix,
+                      session_settings)
 from ..context import messages_prefix
 from ..llm import LLMError
-from ..loop import (SessionEnd, expand_last_output, last_command,
-                    max_steps_for, run_turn)
+from ..loop import (SessionEnd, explain_last, expand_last_output,
+                    export_last, last_command, max_steps_for,
+                    restore_last, run_turn, show_steps)
 from ..prompts import LOOP_HINT, MULTI_TURN_HINT, render_system_prompt
 
 
@@ -13,7 +16,9 @@ def wocc_main(argv):
     argv = list(argv)
     capture_flag = "--capture-sudo" in argv
     loop_flag = "--loop" in argv
-    argv = [item for item in argv if item not in ("--capture-sudo", "--loop")]
+    resume_flag = "--last-session" in argv
+    argv = [item for item in argv
+            if item not in ("--capture-sudo", "--loop", "--last-session")]
 
     cfg = load_config()
     name = prefix(cfg, "wocc_prefix")
@@ -23,6 +28,7 @@ def wocc_main(argv):
     loop_enabled = loop_flag or bool(settings.get("enabled"))
     max_steps = max_steps_for(cfg, loop_enabled)
     auto_safe = bool(settings.get("auto_safe"))
+    store = session_settings(cfg)
 
     if argv and argv[0] in ("-h", "--help"):
         print(f"用法: {name} [--loop] [首轮自然语言描述]")
@@ -31,7 +37,9 @@ def wocc_main(argv):
         print("提问（如“解释一下”“为什么...”）会自动进入 chat 模式，不会被执行。")
         print("  --loop          开启粘性续步：用过 #STEP: 后，裸命令也继续（默认关闭）")
         print("  --capture-sudo  需要 sudo 密码时捕获输出并反馈给模型")
-        print("会话内命令: :q 退出 · :more / v 展开上一条命令的完整输出 · :last 看上一条命令")
+        print("  --last-session  恢复上一次 wocc 会话（[session] persist）")
+        print("会话内命令: :q 退出 · :more / v 展开输出 · :last 看上一条命令")
+        print("            :steps 本回合的步骤审计 · :explain 解释上一条命令与输出")
         sys.exit(0)
 
     if not sys.stdin.isatty():
@@ -52,12 +60,28 @@ def wocc_main(argv):
         with_listing=ls_on_start(cfg),
     )
 
+    if resume_flag:
+        restored = session.load(store["max_messages"], store["max_chars"])
+        if restored:
+            messages.append({"role": "system",
+                             "content": session.context_note(restored)})
+            messages.extend(restored["messages"])
+            restore_last(restored.get("last"))
+            eprint(f"[{alias}] 已恢复上次会话："
+                   f"{len(restored['messages'])} 条消息"
+                   f"（{restored.get('saved_at', '时间未知')}）",
+                   C.GREEN, C.BOLD)
+        else:
+            eprint(f"[{alias}] 没有可恢复的会话"
+                   "（没保存过，或格式不兼容）", C.YELLOW)
+
     eprint(f"[{alias}] 已进入多轮会话，输入 :q 退出", C.GREEN, C.BOLD)
     if loop_enabled:
         eprint(f"[{alias}] loop 已开启：最多 {max_steps} 步，"
                f"只读命令免确认: {'是' if auto_safe else '否'}", C.GREEN)
 
     pending_input = " ".join(argv) if argv else None
+    save_warned = False
 
     while True:
         if pending_input is not None:
@@ -82,6 +106,12 @@ def wocc_main(argv):
             if not expand_last_output():
                 eprint(f"[{alias}] 没有可展开的输出", C.YELLOW)
             continue
+        if user_input == ":steps":
+            show_steps(alias)
+            continue
+        if user_input == ":explain":
+            explain_last(alias, cfg)
+            continue
         if user_input == ":last":
             command = last_command()
             if command:
@@ -101,3 +131,14 @@ def wocc_main(argv):
             # run_turn 已经打印过原因；回滚本回合追加的消息，保持上下文干净。
             del messages[start:]
             continue
+
+        # 每回合结束后落盘：崩溃/断线时最多丢一个回合。
+        if store["persist"]:
+            saved = session.save(messages, model=cfg.get("model"),
+                                 max_messages=store["max_messages"],
+                                 max_chars=store["max_chars"],
+                                 last=export_last())
+            if not saved and not save_warned:
+                eprint(f"[{alias}] 会话保存失败：{session.session_path()}",
+                       C.YELLOW)
+                save_warned = True

@@ -86,6 +86,17 @@ Rules (STRICT):
 8. Do not ask for permission and do not output a plan. Answer the question.
 """
 
+EXPLAIN_SYSTEM_PROMPT = """You are {name}, a terminal assistant. The user ran a shell command and now asks
+what it did and what its output means.
+
+Rules (STRICT):
+1. Explain in the user's language, concisely: what the command does, piece by piece.
+2. Point out anything notable in the output (errors, warnings, surprising numbers).
+3. If stdout or stderr is empty, say so; do not invent content.
+4. Do not output a new shell command. This is an explanation, not a task.
+5. Start directly with the explanation; no preamble.
+"""
+
 MULTI_TURN_HINT = """You are now in a multi-turn interactive session.
 
 After each command you generate, the user's shell will run it and the execution result

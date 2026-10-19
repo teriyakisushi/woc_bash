@@ -57,6 +57,7 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 | `woc/ui.py` | `Spinner`：等待模型/执行命令的一行式 loading（仅 tty） |
 | `woc/pipe.py` | 管道模式：stdin 当数据、只问答不执行；二进制拒绝、头尾截断 |
 | `woc/budget.py` | 预算换算：context / output / input 三者互相约束 |
+| `woc/session.py` | `wocc` 会话落盘/恢复：只存对话、脱敏、限长、0600 |
 | `woc/debug.py` | `WOC_DEBUG=1` 观测：usage、前缀、输入规模、loop 步（只写 stderr） |
 | `woc/config.py` | 分段配置 + 环境变量优先 |
 | `woc/colors.py` | 自绘行编辑器 + 彩色输出（**改动风险最高**） |
@@ -88,3 +89,5 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 - `bash -n` 语法预检只解析、不执行；它挡的是脏字符/拼写错误，不是安全边界。
 - 需要 sudo 密码且无 ticket 时，`wocc` 前台执行且**不回灌输出**（防止 root 可读内容进 prompt）。
 - 模型偶尔会把中文回答当成命令（漏 `#CHAT:`）；已有 exit 127 提示，不要静默吞掉。
+- `wocc` 默认把会话写到 `$XDG_STATE_HOME/woc/sessions/last.json`（脱敏后，0600）；
+  改这段必须同步 `tests/test_session.py`，并且不要往项目目录里写。
