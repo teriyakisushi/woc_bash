@@ -11,6 +11,7 @@ Shell 命令，也可以回答问题、执行命令并在多轮会话中继续�
 - 命令生成后会先等待确认，按 `Enter` 才会执行。
 - 对高风险命令进行拦截，例如删除根目录、格式化磁盘和关机等。
 - 支持 Backspace 编辑输入内容；彩色 prompt 不会被 readline 当作可编辑文本。
+- 等待模型/执行命令时显示一行 loading；仅在终端生效，可用 `[ui] spinner` 关闭。
 
 ## 环境要求
 
@@ -59,6 +60,8 @@ export WOC_OUTPUT_MAXTOKENS="4096"
 export WOC_CAPTURE_SUDO="1"   # 等价于 [sudo] capture_output = true
 export WOC_CONTEXT_LS="1"     # 等价于 [context] ls_on_start = true
 export WOC_LOOP="1"           # 等价于 [loop] enabled = true
+export WOC_SYNTAX_CHECK="0"   # 等价于 [exec] syntax_check = false
+export WOC_SPINNER="0"        # 等价于 [ui] spinner = false
 ```
 
 ### 配置文件
@@ -89,6 +92,12 @@ enabled = false
 max_steps = 5
 total_chars = 24000
 auto_safe = false
+
+[exec]
+syntax_check = true
+
+[ui]
+spinner = true
 ```
 
 环境变量优先于配置文件。默认 API Base 是
@@ -149,8 +158,9 @@ wocc --capture-sudo
 
 ### Agentic loop（`[loop]`）
 
-默认关闭。开启后，`wocc` 允许模型在**一个回合内**多走几步：模型只要在命令前加上
-`#STEP: `，就会执行并把结果喂回去，直到它用 `#CHAT:` 给出结论，或到达步数/预算上限。
+默认关闭。开启后，`wocc` 允许模型在**一个回合内**多走几步：模型用 `#STEP: `
+显式续步；一旦本回合出现过 `#STEP:`，就进入“粘性续步”模式 —— 后面的普通
+命令也会继续执行，直到 `#CHAT:` 给出结论，或到达步数/预算上限。
 
 ```bash
 wocc --loop        # 只对本次会话生效
@@ -159,17 +169,46 @@ wocc --loop        # 只对本次会话生效
 ```toml
 [loop]
 enabled = false        # 等价于 --loop / WOC_LOOP=1
-max_steps = 5          # 单回合最多几步（硬上限 8）
+max_steps = 5          # 单回合最多几步；配置优先，安全上限 50
 total_chars = 24000    # 单回合累计输出预算
 auto_safe = false      # 只读单命令是否免确认
 ```
 
-- 不带 `#STEP:` 的普通命令**行为完全不变**：执行完就结束回合，不会多发一次请求。
+- 从未用过 `#STEP:` 的普通命令仍然是单命令回合：执行完就结束，只发一次请求。
+- 用过 `#STEP:` 后，普通命令不再结束回合；这样模型不会在排查中途因为漏写
+  标记而停下，也不需要你再输入“继续”。只有 `#CHAT:` / `#ERROR:` 会结束。
+- `#STEP:` 会保留在 assistant 历史里（和 `#CHAT:` 同理），避免模型退回裸命令格式。
 - `auto_safe=false`（默认）时每一步仍要按 Enter；设为 `true` 只让
   `ls`、`cat`、`grep`、`wc` 这类**只读单命令**自动执行。带管道、重定向、`$(...)`、
   `;` 的命令一律仍需确认；`find`、`sort`、`awk`、`sed` 不在白名单里
   （分别可 `-exec`、`-o` 写盘、执行命令）。
 - 每步回显 `[step i/N]`；到步数或累计输出上限会明确提示，不会静默停止。
+
+### 命令语法预检（`[exec]`）
+
+默认开启。显示命令、等待确认之前，先用 `bash -n -c` **只做语法解析、不执行**。
+语法错误不会弹确认，也不会执行；`wocc --loop` 里会把错误回灌给模型并继续，
+`woc` 单轮直接报错退出。模型偶尔漏出的 `</br>`、`</exec_result>` 这类脏字符
+会在这里被挡住。对应环境变量 `WOC_SYNTAX_CHECK=0` 可以关闭。
+
+```toml
+[exec]
+syntax_check = true
+```
+
+### 等待与执行提示（`[ui]`）
+
+默认开启，只在 `stderr` 是终端时显示。等待模型时显示
+`[woc] Thinking ⠋ 1.2s`；`wocc` 执行被捕获的命令时显示
+`[woc] Step 2/10 - Running ⠋ 3.4s`。命令开始输出或执行结束会清掉这一行。
+`woc` / `wocc` / `woc -c` 共用，管道/重定向时自动静默。
+
+```toml
+[ui]
+spinner = true
+```
+
+对应环境变量 `WOC_SPINNER=0`；临时关闭也可以用 `WOC_NO_SPINNER=1`。
 
 不要把包含 API Key 的配置文件提交到 Git 或分享给他人。
 
@@ -224,7 +263,7 @@ awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head -n
 ```bash
 woc --templates                              # 列出模板、来源与两层注入策略
 woc --templates --query "看看日志里哪个 IP 最多"   # 预览某个查询会选中哪些正文
-woc --check-templates                        # 自检：危险子串误报、多行截断、可移植性坑
+woc --check-templates                        # 自检：危险命令误拦、多行截断、可移植性坑
 ```
 
 ### 两层注入：索引恒定，正文按预算
@@ -345,11 +384,22 @@ woc_chat 什么是 systemd？
 LLM 输出不应被视为绝对可信。执行命令前请检查命令内容、路径和参数，
 尤其是涉及删除、权限、网络请求或系统配置的操作。
 
-项目内置了一组高风险命令拦截规则，但这不是完整的安全沙箱。请在拥有
-重要数据的环境中谨慎使用，并在需要时先备份数据。
+项目内置的高风险命令拦截不是“整条命令子串匹配”，而是按 shell 语法看**命令位置**：
+
+- 放行：`printf '... reboot ...' > file`、`grep reboot`、`man reboot`、
+  `journalctl -u reboot.target`、`grep mkfs`；
+- 拦截：`systemctl reboot`、`sudo reboot`、`bash -c 'reboot'`、`find -exec reboot`、
+  `rm -rf /`、`mkfs`、`dd of=/dev/sd*`、`> /dev/sd*`、`chmod -R 777 /`。
+
+`sh -c` / `eval` / `find -exec` / `xargs` 会递归检查；解析失败或 stdin 喂给 shell 时
+回退到旧的子串规则（fail-closed）。但它仍**不是完整沙箱**：脚本文件内容、动态拼接、
+编码混淆都可能绕过；`awk` / `sed` / `python` 等可执行代码的宿主命令只在检测到
+执行构造（如 `system(`、`-c`）时保守回退。请在拥有重要数据的环境中谨慎使用，
+并在需要时先备份数据。
 
 `--loop` 会把"每条命令都要人工确认"的边界下移：默认每一步仍需确认，只有
-`auto_safe=true` 时"只读单命令"才免确认；步数、累计输出都有硬上限，越界会明确提示。
+`auto_safe=true` 时"只读单命令"才免确认；粘性续步只改变“回合何时结束”，
+不改变“每条命令是否要确认”；步数、累计输出都有硬上限，越界会明确提示。
 
 ### sudo 与权限
 
@@ -379,7 +429,7 @@ python3 compile.py --uninstall --purge-config
 
 ```bash
 python3 -m compileall -q woc           # 语法
-python3 -m unittest discover -s tests  # 离线回归测试（loop / risk_tier / 标记历史）
+python3 -m unittest discover -s tests  # 离线回归测试（loop / 门禁 / 语法 / 标记历史）
 ```
 
 真实 API 的 `#CHAT:` 标记合规测试**默认跳过**，需要显式开启（会调用模型、产生费用）：

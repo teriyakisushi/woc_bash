@@ -1,6 +1,6 @@
 # 设计摘要：agentic loop 与 task 扩展
 
-> 状态：**已实现并收尾（2026-10-18，基线 `fed74a8`）**。决策：`#STEP:` 协议、`--loop` 开启、
+> 状态：**已实现并收尾（2026-10-18，基线 `fed74a8`；2026-10-19 回归见 §9）**。决策：`#STEP:` 协议、`--loop` 开启、
 > `auto_safe=false`、本阶段不做 task；已落地 Tier 1 体验优化、CI 与离线回归测试（§8）。
 >
 > 目的不是说服，而是把**代价**摆出来：这个项目的卖点是"一条命令 + 一次确认 + 50ms 启动"，
@@ -352,7 +352,7 @@ task 再作为它的"无 LLM 驱动"薄薄一层 —— 这样两者共享执行
 | 1 | `#STEP:` 协议 | ✅ 普通回合仍 1 次请求，实测未退化 |
 | 2 | `--loop` 开启 | ✅ `[loop] enabled` / `WOC_LOOP` |
 | 3 | `auto_safe=false` | ✅ 默认每步确认 |
-| 4 | 步数 5 | ✅ 硬上限 8 |
+| 4 | 步数 5 | ✅ 硬上限 8（2026-10-19 改为 50，见 §9） |
 | 5 | 预算 24000 字符 | ✅ 越界显式提示 |
 | 6 | sudo 无 ticket | ✅ 不执行 → 回灌 126 → 计一步 |
 | 7 | task | ⏸ 本阶段不做 |
@@ -420,3 +420,49 @@ loop 模式下 assistant 历史里还有更多被剥掉标记的命令（`#STEP:
   刻意不做"任意键展开"——那会把交互卡成 pager，必须在读完才能继续输入。
 - **编辑器**：`Ctrl+G` 把完整输入打到上方；横向滚动时用 `<` `>` 标出两侧还有内容。
 - **CI**：`.github/workflows/test.yml`，Python 3.10 / 3.13 跑 `compileall` + `unittest`。
+
+---
+
+## 9. 2026-10-19 回归：粘性续步、输出守卫与结构化门禁
+
+### 9.1 现场
+
+两次真实 loop smoke 都停在 3 步：
+
+- A：2 个 `#STEP:` 后，模型改发 `<｜｜DSML｜｜ ... invoke name="exec_result">`
+  + `placeholder`；旧的 `strip_dsml` 剥掉标签后把 `placeholder` 当命令执行，
+  exit 127，回合结束。
+- B：2 个 `#STEP:` + 1 条裸命令；裸命令执行完回合结束，没有 `#CHAT:`，
+  问题其实没答完。
+
+另外 `printf '... full reboot ...' > issue.txt` 被 `\b(shutdown|reboot|...)\b`
+的子串匹配拦成“关机 / 重启”；`</br>` 被原样送进 bash，syntax error。
+
+### 9.2 决定
+
+| # | 决定 | 落地 |
+|---|---|---|
+| 1 | `#STEP:` 也保留在 assistant 历史里 | ✅ 与 §8.1 的 `#CHAT:` 同理 |
+| 2 | 粘性续步：出现过 `#STEP:` 后，裸命令也继续 | ✅ 只有 `#CHAT:` / `#ERROR:` 结束 |
+| 3 | 单命令回合不被拖慢 | ✅ 从未用 `#STEP:` 时仍是 1 次请求 |
+| 4 | 工具调用残留不执行 | ✅ `has_toolcall()` 在 `strip_dsml` 之前检查 |
+| 5 | 语法预检 | ✅ `bash -n -c`，`[exec] syntax_check` 可关 |
+| 6 | loading | ✅ `woc/ui.py` Spinner，`[ui] spinner` 可关，英文文案 |
+| 7 | 门禁结构化 | ✅ `woc/gate.py`：命令位置 / 包装器 / 递归 / 保守回退 |
+| 8 | `max_steps` 配置优先 | ✅ 硬上限从 8 改为 50（防误配，不是产品上限） |
+
+### 9.3 代价与边界
+
+- 粘性续步只在 loop 开启时生效；多步回合可能多一次“最后裸命令 → #CHAT:”的请求。
+  单命令回合、loop 关闭时的路径完全不变。
+- 门禁不再是“整串子串匹配”：`printf` / `grep` / `man` / `journalctl` 正文里的
+  `reboot` 不再误报；`systemctl reboot`、`bash -c 'reboot'`、`find -exec reboot`
+  仍然拦截。`sh -c` / `eval` / `find -exec` / `xargs` 递归检查；解析失败或
+  stdin 喂给 shell 时回退旧规则。脚本宿主（`awk`/`sed`/`python`）只在其自身
+  出现执行构造时保守回退。
+- 门禁模块约 870 行（含注释），是本项目目前最大的一次单点增量；换来的是
+  可测试的边界，而不是继续在 `sanitize.py` 里堆正则。若后续嫌重，可先删
+  `_unwrap_ionice` / `_unwrap_stdbuf` 等低频包装器。
+- 它不是沙箱：动态拼接、脚本文件内容、编码混淆仍可能绕过；人工确认仍是边界。
+- 测试：`tests/test_loop.py` 41 个离线用例（1 个 live skip），新增
+  `StickyLoopTest` / `ProtocolGuardTest` / `GateTest` / `SyntaxCheckTest` / `SpinnerTest`。
