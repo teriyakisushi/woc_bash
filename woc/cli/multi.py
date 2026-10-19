@@ -32,6 +32,12 @@ def wocc_main(argv):
         print("  --capture-sudo  需要 sudo 密码时捕获输出并反馈给模型")
         sys.exit(0)
 
+    if not sys.stdin.isatty():
+        # 非终端时 interactive_input 会退化成 input()，任意一行都算“确认”。
+        eprint(f"[{alias}] {name} 需要终端：当前标准输入不是终端，"
+               "无法逐条确认命令，已退出。", C.RED)
+        sys.exit(2)
+
     # 会话级稳定前缀：system prompt + 多轮说明 + template 参考库 + 环境。
     # 只在开始时构造一次，因此每轮请求的前缀逐字节相同 —— 前缀缓存能持续命中。
     # 目录快照也只在启动时生成一次，随后作为前缀的一部分复用，不重复执行 ls。
@@ -105,7 +111,8 @@ def wocc_main(argv):
         try:
             cmd = sanitize(raw)
         except ChatResponse as chat:
-            messages.append({"role": "assistant", "content": chat.text})
+            # 保留 #CHAT: 标记：剥掉后模型会模仿裸正文，后续轮次继续漏标记。
+            messages.append({"role": "assistant", "content": "#CHAT: " + chat.text})
             continue
         except CommandGenError as e:
             eprint(f"[{alias}] {e}", C.RED)
