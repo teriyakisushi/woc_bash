@@ -49,6 +49,7 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 | `woc/cli/multi.py` | `wocc` 会话循环（用户输入、`:q` / `:more` / `:last`） |
 | `woc/cli/single.py` | 单轮 `woc`（确认后 `os.execvp`） |
 | `woc/cli/chat.py` | `woc -c` 聊天（Markdown 渲染） |
+| `woc/cli/completion.py` | `--completion bash\|zsh` 补全脚本生成 |
 | `woc/context.py` | 模板两层注入、`<environment>`、目录快照、`messages_prefix()` |
 | `woc/llm.py` | SSE 流式 + `StreamFilter`（`#CHAT:` / `#STEP:` 识别） |
 | `woc/sanitize.py` | 命令清洗、DSML 剥离、工具调用守卫、root-shell 判定 |

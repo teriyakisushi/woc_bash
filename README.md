@@ -53,6 +53,9 @@ python3 compile.py --prefix ~/.local/bin --key sk-xxxx
 
 ## 配置
 
+每个键的默认值、环境变量与校验规则见 **[docs/CONFIG.md](docs/CONFIG.md)**；
+下面是常用部分的速查。
+
 ### 环境变量
 
 ```bash
@@ -70,6 +73,7 @@ export WOC_PIPE="0"           # 等价于 [pipe] enabled = false
 export WOC_PIPE_MAX_CHARS="32000"   # 等价于 [pipe] max_chars
 export WOC_MAX_INPUT_CHARS="32000"  # 等价于 [budget] max_input_chars
 export WOC_CONTEXT_TOKENS="64000"   # 等价于 [budget] context_tokens
+export WOC_FOLD_LINES="25"          # 等价于 [ui] fold_lines
 export WOC_DEBUG="1"                # 等价于 [debug] enabled = true
 export WOC_SESSION_PERSIST="0"      # 等价于 [session] persist = false
 export WOC_SESSION_MAX_MESSAGES="40"
@@ -268,6 +272,7 @@ syntax_check = true
 ```toml
 [ui]
 spinner = true
+fold_lines = 25   # 超过多少行折叠；0 表示不折叠
 ```
 
 对应环境变量 `WOC_SPINNER=0`；临时关闭也可以用 `WOC_NO_SPINNER=1`。
@@ -449,8 +454,12 @@ wocc
 ```
 
 输入 `:q`、`exit` 或 `quit` 退出。命令执行结果会自动加入下一轮上下文。
-`:steps` 打印本回合每一步的命令、退出码与耗时；`:explain` 把上一条命令与输出
-发给模型解释（只发一次请求，不执行任何东西，也不进会话历史）。
+会话内命令（输入 `:help` 可以随时查看）：
+
+- `:steps` 打印本回合每一步的命令、退出码与耗时；
+- `:explain` 把上一条命令与输出发给模型解释（只发一次请求，不执行任何东西，也不进历史）；
+- `:again` 重跑上一条命令（仍然过危险检查与人工确认，结果写回历史）；
+- `:more` / `v` 展开输出，`:last` 重看上一条命令。
 
 命令生成后：
 
@@ -480,11 +489,19 @@ wocc --loop
 wocc --last-session
 ```
 
+看所有保存过的会话、或恢复其中某一个：
+
+```bash
+wocc --sessions
+wocc --resume session-20261019-121500
+```
+
 ### 会话恢复（`--last-session`）
 
 `wocc` 每个回合结束后会把对话写到 `$XDG_STATE_HOME/woc/sessions/last.json`
-（默认 `~/.local/state/woc/sessions/last.json`，权限 0600）。下次用
-`wocc --last-session` 启动时会把它接回来，从上次的上下文继续。
+（默认 `~/.local/state/woc/sessions/last.json`，权限 0600），同时留一份
+`session-<时间戳>.json` 归档（保留最近 20 个）。下次用 `wocc --last-session`
+接回最近一次，或用 `wocc --sessions` 列表 + `wocc --resume <名字>` 挑一个。
 
 - **只回放 user/assistant**：system prompt、模板、`<environment>` 每次按当前环境
   重建，所以换目录、改配置、更新模板之后仍然自洽；
@@ -550,6 +567,18 @@ LLM 输出不应被视为绝对可信。执行命令前请检查命令内容、�
 - 会打开交互式 root shell 的命令（`sudo -i`、`sudo -s`、`su`）一律拒绝。
 - 需要连续执行 sudo 命令时，可在同一终端先执行 `sudo -v`。
 - 环境注入只包含工作目录、发行版、uid/groups 和容器类型，**不注入任何环境变量**。
+
+### Shell 补全
+
+生成 bash / zsh 补全脚本（只补命令名与参数，不涉及执行语义）：
+
+```bash
+source <(woc --completion bash)    # 临时启用
+source <(woc --completion zsh)
+```
+
+想长期生效，把这一行加进 `~/.bashrc` / `~/.zshrc`（或把输出重定向到补全目录）。
+命令名会跟随 `[prefix]` 配置。
 
 ## 卸载
 
