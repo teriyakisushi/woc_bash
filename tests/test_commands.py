@@ -112,3 +112,64 @@ class ExplainTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HelpTest(unittest.TestCase):
+    def test_lists_all_commands(self):
+        from woc.cli import multi
+        err = io.StringIO()
+        with redirect_stderr(err):
+            multi.show_help("woc")
+        text = err.getvalue()
+        for name in (":more", ":last", ":steps", ":explain", ":again", ":help"):
+            self.assertIn(name, text)
+
+
+class AgainTest(unittest.TestCase):
+    def setUp(self):
+        self._saved = dict(L._LAST)
+        L._LAST.update(command="", output="", stderr="", code=None)
+
+    def tearDown(self):
+        L._LAST.update(self._saved)
+
+    def test_without_command(self):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertFalse(L.rerun_last([], "woc", CFG))
+        self.assertIn("还没有执行过", err.getvalue())
+
+    def test_denied_command_is_not_executed(self):
+        L._LAST.update(command="rm -rf /", output="", stderr="", code=0)
+        with mock.patch.object(L, "_execute") as execute:
+            with redirect_stderr(io.StringIO()):
+                self.assertFalse(L.rerun_last([], "woc", CFG))
+        execute.assert_not_called()
+
+    def test_reruns_and_appends_history(self):
+        L._LAST.update(command="ls -l", output="", stderr="", code=0)
+        messages = []
+        with mock.patch.object(L, "_execute",
+                               return_value=("ok", "out", "", 0, False)), \
+                mock.patch.object(L, "_confirm", return_value="run"), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertTrue(L.rerun_last(messages, "woc", CFG))
+        self.assertEqual(messages[0],
+                         {"role": "assistant", "content": "ls -l"})
+        self.assertEqual(messages[1], {"role": "user", "content": "ok"})
+        self.assertEqual(L._LAST["code"], 0)
+
+
+class FoldTest(unittest.TestCase):
+    def output(self, limit):
+        buf = io.StringIO()
+        text = "".join("line%d\n" % i for i in range(30))
+        with redirect_stdout(buf):
+            L._print_output(text, "", 0, "woc", limit=limit)
+        return buf.getvalue()
+
+    def test_limit_triggers_folding(self):
+        self.assertIn("已折叠", self.output(5))
+
+    def test_zero_disables_folding(self):
+        self.assertNotIn("已折叠", self.output(0))

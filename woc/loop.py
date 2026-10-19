@@ -13,6 +13,7 @@ import time
 
 from . import debug
 from .colors import C, cout, eprint, interactive_input, read_key
+from .config import fold_lines as fold_lines_config
 from .config import spinner as spinner_enabled
 from .config import syntax_check as syntax_check_enabled
 from .exec import (format_exec_result, format_foreground_result, needs_privilege,
@@ -117,12 +118,12 @@ def _confirm(alias):
     return "run"
 
 
-def _print_output(out, err, code, alias):
+def _print_output(out, err, code, alias, limit=FOLD_LINES):
     """打印命令输出。stdout 过长才折叠；stderr 与失败时永远完整显示。"""
     folded = False
     if out:
         lines = out.splitlines()
-        if code == 0 and len(lines) > FOLD_LINES:
+        if limit > 0 and code == 0 and len(lines) > limit:
             hidden = len(lines) - FOLD_HEAD - FOLD_TAIL
             sys.stdout.write("\n".join(lines[:FOLD_HEAD]) + "\n")
             sys.stdout.write(f"… 已折叠 {hidden} 行（输入 :more 展开全文）\n")
@@ -238,6 +239,56 @@ def explain_last(alias, cfg):
     return True
 
 
+def rerun_last(messages, alias, cfg, capture=False):
+    """重跑上一条命令（`:again`）：仍然过 gate + 人工确认，并写回会话历史。"""
+    cmd = _LAST["command"]
+    if not cmd:
+        eprint(f"[{alias}] 还没有执行过命令", C.YELLOW)
+        return False
+    if is_root_shell(cmd) or is_dangerous(cmd):
+        eprint(f"[{alias}] 该命令现在会被安全策略拒绝，未执行：", C.YELLOW, C.BOLD)
+        eprint(f"  {cmd}", C.YELLOW)
+        return False
+    if syntax_check_enabled(cfg):
+        error = syntax_error(cmd)
+        if error:
+            eprint(f"[{alias}] 命令语法错误，未执行：", C.YELLOW, C.BOLD)
+            eprint(f"  {cmd[:200]}", C.YELLOW)
+            return False
+
+    eprint(f"[{alias}] 将重跑：", C.GREEN)
+    eprint(f"  {cmd}", C.CYAN)
+    action = _confirm(alias)
+    if action == "skip":
+        eprint(f"[{alias}] 已跳过", C.YELLOW)
+        return False
+    if action == "edit":
+        try:
+            edited = interactive_input(prompt="", initial=cmd).strip()
+        except (KeyboardInterrupt, EOFError):
+            eprint(f"\n[{alias}] 已取消", C.YELLOW)
+            return False
+        if not edited:
+            eprint(f"[{alias}] 已跳过", C.YELLOW)
+            return False
+        if is_root_shell(edited) or is_dangerous(edited):
+            eprint(f"[{alias}] 编辑后的命令仍被拒绝，未执行", C.YELLOW, C.BOLD)
+            return False
+        cmd = edited
+
+    result, out, err, code, shown = _execute(
+        cmd, alias, capture, spinner=spinner_enabled(cfg),
+        label=f"[{alias}] Running")
+    _LAST.update(command=cmd, output=out, stderr=err, code=code)
+    if not shown:
+        _print_output(out, err, code, alias, limit=fold_lines_config(cfg))
+    if code != 0:
+        eprint(f"[{alias}] exit_code={code}", C.RED)
+    messages.append({"role": "assistant", "content": cmd})
+    messages.append({"role": "user", "content": result})
+    return True
+
+
 def _ask(messages, cfg, alias, spinner=False, step=None, max_steps=None):
     """流式请求一轮，返回模型的原始文本（含 #STEP: 标记）。"""
     state = {"mode": None, "started": False}
@@ -340,6 +391,7 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
     """
     _STEPS.clear()
     max_steps, total_chars, auto_safe = _limits(cfg, loop_enabled)
+    fold_limit = fold_lines_config(cfg)
     show_spinner = spinner_enabled(cfg)
     check_syntax = syntax_check_enabled(cfg)
     spent = 0
@@ -511,7 +563,7 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
         _LAST["stderr"] = err
         _LAST["code"] = code
         if not shown:
-            _print_output(out, err, code, alias)
+            _print_output(out, err, code, alias, limit=fold_limit)
         if code != 0:
             eprint(f"[{alias}] exit_code={code}", C.RED)
         if code == 127 and _CJK_RE.search(cmd):

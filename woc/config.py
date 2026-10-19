@@ -37,7 +37,7 @@ LOOP_DEFAULTS = {
 EXEC_DEFAULTS = {"syntax_check": True}
 
 # [ui] 段：等待模型/执行命令时的 loading（仅 tty 生效）。
-UI_DEFAULTS = {"spinner": True}
+UI_DEFAULTS = {"spinner": True, "fold_lines": 25}
 
 # [pipe] 段：标准输入不是终端时，把 stdin 当数据问答（只回答、不执行命令）。
 # max_chars 默认 None：不单独配置时跟随 [budget] max_input_chars。
@@ -139,6 +139,16 @@ def spinner(cfg):
     return bool((cfg.get("ui") or {}).get("spinner", UI_DEFAULTS["spinner"]))
 
 
+def fold_lines(cfg):
+    """超过多少行折叠输出（[ui] fold_lines）。0 表示不折叠。"""
+    settings = cfg.get("ui") or {}
+    try:
+        value = int(settings.get("fold_lines", UI_DEFAULTS["fold_lines"]))
+    except (TypeError, ValueError):
+        return UI_DEFAULTS["fold_lines"]
+    return max(value, 0)
+
+
 def session_settings(cfg):
     """wocc 会话持久化设置（[session]）。坏值一律回落到默认值。"""
     settings = cfg.get("session") or {}
@@ -205,6 +215,7 @@ def load_config(path=None):
 
         [ui]
         spinner = true
+        fold_lines = 25
 
         [pipe]
         enabled = true
@@ -276,6 +287,8 @@ def load_config(path=None):
         },
         "ui": {
             "spinner": _env_bool("WOC_SPINNER", UI_DEFAULTS["spinner"]),
+            "fold_lines": _env_positive_int(
+                "WOC_FOLD_LINES", UI_DEFAULTS["fold_lines"], notes),
         },
         "pipe": {
             "enabled": _env_bool("WOC_PIPE", PIPE_DEFAULTS["enabled"]),
@@ -333,6 +346,11 @@ def load_config(path=None):
                 if section == "ui":
                     if key == "spinner" and "WOC_SPINNER" not in os.environ:
                         cfg["ui"]["spinner"] = _to_bool(value)
+                    elif (key == "fold_lines"
+                          and "WOC_FOLD_LINES" not in os.environ):
+                        cfg["ui"]["fold_lines"] = _file_positive_int(
+                            value, UI_DEFAULTS["fold_lines"], notes,
+                            "ui.fold_lines")
                     continue
                 if section == "budget":
                     if (key == "context_tokens"

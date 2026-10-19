@@ -8,8 +8,26 @@ from ..context import messages_prefix
 from ..llm import LLMError
 from ..loop import (SessionEnd, explain_last, expand_last_output,
                     export_last, last_command, max_steps_for,
-                    restore_last, run_turn, show_steps)
+                    rerun_last, restore_last, run_turn, show_steps)
 from ..prompts import LOOP_HINT, MULTI_TURN_HINT, render_system_prompt
+
+HELP_LINES = (
+    (":q / exit / quit", "结束会话"),
+    (":more / v", "展开上一条命令的完整输出"),
+    (":last", "重看上一条命令"),
+    (":steps", "本回合的步骤审计"),
+    (":explain", "解释上一条命令与输出（只发一次请求，不进历史）"),
+    (":again", "重跑上一条命令（仍需确认）"),
+    (":help", "显示这段帮助"),
+)
+
+
+def show_help(alias):
+    eprint(f"[{alias}] 会话内命令：", C.GREEN, C.BOLD)
+    for command, desc in HELP_LINES:
+        eprint(f"  {command:<16} {desc}", C.GRAY)
+
+
 
 
 def wocc_main(argv):
@@ -102,6 +120,12 @@ def wocc_main(argv):
         if user_input in (":q", "exit", "quit"):
             eprint(f"[{alias}] 会话结束", C.GREEN)
             break
+        if user_input in (":help", ":h", "?"):
+            show_help(alias)
+            continue
+        if user_input == ":again":
+            rerun_last(messages, alias=alias, cfg=cfg, capture=capture)
+            continue
         if user_input in (":more", "v"):
             if not expand_last_output():
                 eprint(f"[{alias}] 没有可展开的输出", C.YELLOW)
