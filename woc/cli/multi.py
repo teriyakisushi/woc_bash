@@ -4,10 +4,9 @@ from ..colors import C, cerr, eprint, interactive_input
 from ..config import capture_sudo, load_config, ls_on_start, prefix
 from ..context import messages_prefix
 from ..llm import LLMError
-from ..loop import SessionEnd, expand_last_output, last_command, run_turn
+from ..loop import (SessionEnd, expand_last_output, last_command,
+                    max_steps_for, run_turn)
 from ..prompts import LOOP_HINT, MULTI_TURN_HINT, render_system_prompt
-
-MAX_STEPS_LIMIT = 8
 
 
 def wocc_main(argv):
@@ -22,7 +21,7 @@ def wocc_main(argv):
     capture = capture_flag or capture_sudo(cfg)
     settings = cfg.get("loop") or {}
     loop_enabled = loop_flag or bool(settings.get("enabled"))
-    max_steps = min(max(int(settings.get("max_steps", 5)), 1), MAX_STEPS_LIMIT)
+    max_steps = max_steps_for(cfg, loop_enabled)
     auto_safe = bool(settings.get("auto_safe"))
 
     if argv and argv[0] in ("-h", "--help"):
@@ -30,7 +29,7 @@ def wocc_main(argv):
         print("进入交互式多轮会话，每轮命令的执行结果会自动反馈给 LLM。")
         print("输入 :q / exit / quit 退出。")
         print("提问（如“解释一下”“为什么...”）会自动进入 chat 模式，不会被执行。")
-        print("  --loop          允许模型用 #STEP: 续步（默认关闭）")
+        print("  --loop          开启粘性续步：用过 #STEP: 后，裸命令也继续（默认关闭）")
         print("  --capture-sudo  需要 sudo 密码时捕获输出并反馈给模型")
         print("会话内命令: :q 退出 · :more / v 展开上一条命令的完整输出 · :last 看上一条命令")
         sys.exit(0)

@@ -28,6 +28,7 @@ Rules for command mode (STRICT):
    output a plan. The user has already approved execution: emit the finished command.
 9. If the request is impossible or unsafe, output exactly: #ERROR: <short reason>
 10. Never wrap the command in quotes.
+11. Never emit XML / DSML / tool-call syntax. Output plain text only.
 
 [B] CHAT MODE
 If the user is clearly ASKING A QUESTION or wants an explanation/discussion rather than
@@ -83,6 +84,9 @@ stderr:
 Use that result as context to answer the user's next request.
 Still obey all rules above: output ONLY ONE single-line bash command, OR a #CHAT: reply
 when the user is asking a question rather than requesting an action.
+
+Never emit tool-call / XML / DSML syntax. The <exec_result> blocks are plain text from
+the harness, not tool calls.
 """
 
 
@@ -93,16 +97,26 @@ def render_system_prompt(name):
 LOOP_HINT = """
 AGENTIC LOOP (enabled for this session): you may take several steps, one command per step.
 
-Default behaviour is unchanged: a plain command ends the turn. If — and only if — the next
-step genuinely depends on this command's real output (for example "find the largest file,
-then read it"), prefix the command with `#STEP: ` so the harness runs it and comes back:
+To take another step, prefix the command with `#STEP: `. Use it when — and only when —
+the next command genuinely depends on this command's real output (for example "find the
+largest file, then read it"):
 
   #STEP: f=$(find . -type f -printf '%s %p\\n' | sort -rn | head -n1 | cut -d' ' -f2-); echo "$f"; cat "$f"
+
+A plain command (no marker) is executed too. If you have never used `#STEP:` in this
+turn, it ends the turn as before (single-command mode). Once you have used `#STEP:`,
+the turn becomes multi-step: bare commands are treated as further steps, not as the
+end. Only a `#CHAT:` reply ends a multi-step turn.
 
 Rules:
 1. Use `#STEP:` only when a single command cannot answer the request.
 2. After a `#STEP:` result comes back, either send another `#STEP:` or finish with a
    `#CHAT:` reply that answers the user.
-3. A plain command (no marker) still ends the turn. Never emit more than one command per
-   reply, never plan out loud, and never ask the user for permission.
+3. Do not stop in the middle of an investigation with a bare command. When you have
+   used `#STEP:` in this turn, keep going until the user's request is fully answered,
+   then finish with `#CHAT:`.
+4. Never emit more than one command per reply, never plan out loud, and never ask the
+   user for permission.
+5. Never emit tool-call / XML / DSML syntax. `#STEP:` and `#CHAT:` are the only markers.
+   The <exec_result> blocks are plain text from the harness, not tool calls.
 """

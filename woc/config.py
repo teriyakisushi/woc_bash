@@ -31,6 +31,12 @@ LOOP_DEFAULTS = {
     "auto_safe": False,
 }
 
+# [exec] 段：命令执行前的检查。syntax_check 用 bash -n 预检语法。
+EXEC_DEFAULTS = {"syntax_check": True}
+
+# [ui] 段：等待模型/执行命令时的 loading（仅 tty 生效）。
+UI_DEFAULTS = {"spinner": True}
+
 
 def _to_bool(value):
     return str(value).strip().lower() not in ("", "0", "false", "no", "off")
@@ -94,6 +100,17 @@ def ls_on_start(cfg):
     return bool((cfg.get("context") or {}).get("ls_on_start"))
 
 
+def syntax_check(cfg):
+    """是否在确认前用 `bash -n` 预检命令语法（[exec] syntax_check）。"""
+    return bool((cfg.get("exec") or {}).get(
+        "syntax_check", EXEC_DEFAULTS["syntax_check"]))
+
+
+def spinner(cfg):
+    """是否显示等待模型/执行命令的 loading（[ui] spinner，仅 tty 生效）。"""
+    return bool((cfg.get("ui") or {}).get("spinner", UI_DEFAULTS["spinner"]))
+
+
 def load_config(path=None):
     """读取配置；环境变量优先于配置文件。
 
@@ -104,12 +121,18 @@ def load_config(path=None):
         wocc_prefix = "qwee"
         woc_chat_prefix = "qwe_chat"
 
-    以及 [sudo] / [context] 段：
+    以及 [sudo] / [context] / [exec] / [ui] 段：
         [sudo]
         capture_output = false
 
         [context]
         ls_on_start = false
+
+        [exec]
+        syntax_check = true
+
+        [ui]
+        spinner = true
 
     根级 output_maxtokens 控制单次回复的最大 token 数（默认 4096）。
     """
@@ -131,6 +154,13 @@ def load_config(path=None):
             "total_chars": _env_positive_int(
                 "WOC_LOOP_TOTAL_CHARS", LOOP_DEFAULTS["total_chars"], notes),
             "auto_safe": _env_bool("WOC_LOOP_AUTO_SAFE", LOOP_DEFAULTS["auto_safe"]),
+        },
+        "exec": {
+            "syntax_check": _env_bool(
+                "WOC_SYNTAX_CHECK", EXEC_DEFAULTS["syntax_check"]),
+        },
+        "ui": {
+            "spinner": _env_bool("WOC_SPINNER", UI_DEFAULTS["spinner"]),
         },
     }
 
@@ -175,6 +205,14 @@ def load_config(path=None):
                     elif key == "total_chars" and "WOC_LOOP_TOTAL_CHARS" not in os.environ:
                         cfg["loop"]["total_chars"] = _file_positive_int(
                             value, LOOP_DEFAULTS["total_chars"], notes, "loop.total_chars")
+                    continue
+                if section == "exec":
+                    if key == "syntax_check" and "WOC_SYNTAX_CHECK" not in os.environ:
+                        cfg["exec"]["syntax_check"] = _to_bool(value)
+                    continue
+                if section == "ui":
+                    if key == "spinner" and "WOC_SPINNER" not in os.environ:
+                        cfg["ui"]["spinner"] = _to_bool(value)
                     continue
                 if section:
                     continue

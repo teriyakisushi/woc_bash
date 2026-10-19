@@ -145,6 +145,25 @@ def run_command_capture_pty(cmd, max_output=8000):
     return text, "(stdout/stderr 已由 pty 合并)", code
 
 
+def syntax_error(cmd):
+    """用 `bash -n` 预检语法：只解析、不执行。语法正确返回 None。"""
+    try:
+        proc = subprocess.run(
+            ["bash", "-n", "-c", cmd],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # 检查本身不可用时不要阻断正常执行。
+        return None
+    if proc.returncode == 0:
+        return None
+    err = proc.stderr.decode("utf-8", "replace").strip()
+    return err or f"bash -n 退出码 {proc.returncode}"
+
+
 # Execution Commands
 def run_command_capture(cmd, max_output=8000, timeout=120):
     try:

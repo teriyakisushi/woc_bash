@@ -11,13 +11,17 @@ import re
 import sys
 
 from .colors import C, cout, eprint, interactive_input, read_key
+from .config import spinner as spinner_enabled
+from .config import syntax_check as syntax_check_enabled
 from .exec import (format_exec_result, format_foreground_result, needs_privilege,
                    pty_capture_available, run_command_capture,
                    run_command_capture_pty, run_command_foreground,
-                   sudo_ticket_valid)
+                   sudo_ticket_valid, syntax_error)
 from .llm import LLMError, StreamMode, call_llm_messages
 from .sanitize import (ChatResponse, CommandGenError, dangerous_reason,
-                       is_dangerous, is_root_shell, sanitize, strip_dsml)
+                       has_toolcall, is_dangerous, is_root_shell, sanitize,
+                       strip_dsml)
+from .ui import Spinner
 
 STEP_MARKER = "#STEP:"
 
@@ -35,7 +39,8 @@ READ_ONLY = frozenset({
 # 宁可多判一条 confirm，也不要让 `cat a | xargs rm` 落进 safe。
 _UNBOUNDED = "|&;$`><()"
 
-MAX_STEPS_LIMIT = 8
+# 配置优先；这里只是防止误配的绝对上限（默认 5，README 允许用户调大）。
+MAX_STEPS_LIMIT = 50
 
 # 输出折叠：只折叠"成功的命令 stdout"，stderr / 失败 / 模型回答都不折。
 FOLD_LINES = 25
@@ -69,14 +74,25 @@ def risk_tier(cmd):
     return "safe" if cmd.split()[0] in READ_ONLY else "confirm"
 
 
+def max_steps_for(cfg, loop_enabled=True):
+    """生效步数：配置优先，MAX_STEPS_LIMIT 只是防误配的绝对上限。"""
+    settings = cfg.get("loop") or {}
+    try:
+        value = int(settings.get("max_steps", 5))
+    except (TypeError, ValueError):
+        value = 5
+    value = min(max(value, 1), MAX_STEPS_LIMIT)
+    return value if loop_enabled else 1
+
+
 def _limits(cfg, loop_enabled):
     settings = cfg.get("loop") or {}
-    max_steps = int(settings.get("max_steps", 5))
-    total_chars = int(settings.get("total_chars", 24000))
-    max_steps = min(max(max_steps, 1), MAX_STEPS_LIMIT)
-    if not loop_enabled:
-        max_steps = 1
-    return max_steps, max(total_chars, 1), bool(settings.get("auto_safe"))
+    try:
+        total_chars = int(settings.get("total_chars", 24000))
+    except (TypeError, ValueError):
+        total_chars = 24000
+    return (max_steps_for(cfg, loop_enabled), max(total_chars, 1),
+            bool(settings.get("auto_safe")))
 
 
 def _confirm(alias):
@@ -130,36 +146,46 @@ def last_command():
     return _LAST["command"]
 
 
-def _ask(messages, cfg, alias):
+def _ask(messages, cfg, alias, spinner=False, step=None, max_steps=None):
     """流式请求一轮，返回模型的原始文本（含 #STEP: 标记）。"""
-    state = {"mode": None}
+    state = {"mode": None, "started": False}
+    label = f"[{alias}] Thinking"
+    if step is not None and max_steps and max_steps > 1:
+        label = f"[{alias}] Step {step}/{max_steps} - Thinking"
+    spin = Spinner(label, enabled=spinner)
 
     def on_mode(mode):
         state["mode"] = mode
 
     def on_chunk(text):
+        if not state["started"]:
+            state["started"] = True
+            spin.stop()
+            sys.stdout.write("\n" + cout("[assistant] ", C.GREEN, C.BOLD))
         if state["mode"] == StreamMode.COMMAND:
             sys.stdout.write(cout(text, C.CYAN, C.BOLD))
         else:
             sys.stdout.write(text)
         sys.stdout.flush()
 
-    sys.stdout.write("\n" + cout("[assistant] ", C.GREEN, C.BOLD))
-    sys.stdout.flush()
+    spin.start()
     try:
         raw = call_llm_messages(messages, cfg, on_chunk=on_chunk, on_mode=on_mode)
     except LLMError as exc:
+        spin.stop()
         sys.stdout.write("\n")
         sys.stdout.flush()
         eprint(f"[{alias}] LLM 调用失败：{exc}", C.RED)
         eprint(f"[{alias}] 本轮已跳过，可换个说法重试，或 :q 退出", C.YELLOW)
         raise
+    finally:
+        spin.stop()
     sys.stdout.write("\n")
     sys.stdout.flush()
     return raw
 
 
-def _execute(cmd, alias, capture):
+def _execute(cmd, alias, capture, spinner=False, label=""):
     """执行一步，返回 (exec_result 文本, stdout, stderr, exit_code, 是否已回显)。"""
     if needs_privilege(cmd) and not sudo_ticket_valid():
         if not sys.stdin.isatty():
@@ -192,7 +218,12 @@ def _execute(cmd, alias, capture):
             eprint(f"[{alias}] {ferr}", C.RED)
         return format_foreground_result(code, ferr), "", "", code, True
 
-    out, err, code = run_command_capture(cmd)
+    spin = Spinner(label or f"[{alias}] Running", enabled=spinner)
+    spin.start()
+    try:
+        out, err, code = run_command_capture(cmd)
+    finally:
+        spin.stop()
     return format_exec_result(out, err, code), out, err, code, False
 
 
@@ -212,21 +243,36 @@ def _rejected(alias, cmd, reason, hint):
 def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
     """跑完一个用户回合；messages 以用户消息结尾，返回时已补全执行结果。
 
-    `loop_enabled=False` 时行为与旧版 wocc 完全一致（只发一次请求、只执行一条命令）。
+    loop 开启后采用"粘性续步"：本回合一旦出现过 #STEP:，后面的裸命令也算一步，
+    只有 #CHAT: / #ERROR: 结束回合；从未用过 #STEP: 的单命令回合仍是一次请求结束。
     """
     max_steps, total_chars, auto_safe = _limits(cfg, loop_enabled)
+    show_spinner = spinner_enabled(cfg)
+    check_syntax = syntax_check_enabled(cfg)
     spent = 0
     last_cmd = None
+    multi_step = False
 
     for step in range(1, max_steps + 1):
-        raw = _ask(messages, cfg, alias)
+        raw = _ask(
+            messages, cfg, alias, spinner=show_spinner,
+            step=step if multi_step else None,
+            max_steps=max_steps if multi_step else None,
+        )
         text = strip_dsml(raw).strip()
         step_requested = text.lstrip().startswith(STEP_MARKER)
         body = (text.lstrip()[len(STEP_MARKER):].strip()
                 if step_requested else text)
         step_mode = step_requested and loop_enabled
+        if step_mode:
+            multi_step = True
 
         try:
+            # run_turn 会先剥 DSML，所以守卫必须看 raw，而不是剥完的 body。
+            if has_toolcall(raw) and not text.lstrip().startswith("#CHAT:"):
+                raise CommandGenError(
+                    "模型输出了工具调用/标签格式，已拒绝执行；"
+                    "请只返回一条命令，或 #CHAT: 回答")
             cmd = sanitize(body)
         except ChatResponse as chat:
             # 历史里**保留** `#CHAT:` 标记：模型会模仿自己上一轮的回复格式，剥掉标记
@@ -246,11 +292,13 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                     "</exec_result>"
                 ),
             })
-            if step_mode:
+            if step_mode or multi_step:
                 continue
             return
 
-        messages.append({"role": "assistant", "content": cmd})
+        # 和 #CHAT: 同理：历史里保留 #STEP:，否则模型会慢慢退回"裸命令"格式。
+        assistant_content = (STEP_MARKER + " " + cmd) if step_mode else cmd
+        messages.append({"role": "assistant", "content": assistant_content})
 
         if is_root_shell(cmd):
             block = _rejected(
@@ -260,7 +308,7 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                 "请改成具体的非交互命令。",
             )
             messages.append({"role": "user", "content": block})
-            if step_mode:
+            if step_mode or multi_step:
                 continue
             return
 
@@ -273,14 +321,36 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                 f"命令因安全策略被拒绝：{reason}。请换一种安全写法。",
             )
             messages.append({"role": "user", "content": block})
-            if step_mode:
+            if step_mode or multi_step:
                 continue
             return
 
-        if step_mode and cmd == last_cmd:
+        if (step_mode or multi_step) and cmd == last_cmd:
             eprint(f"[{alias}] 模型连续两次给出同一条命令，已中止", C.YELLOW, C.BOLD)
             return
         last_cmd = cmd
+
+        if check_syntax:
+            error = syntax_error(cmd)
+            if error:
+                detail = "\n".join(error.strip().splitlines()[-2:])[:500]
+                eprint(f"[{alias}] 命令语法错误，未执行：", C.YELLOW, C.BOLD)
+                eprint(f"  {cmd[:200]}", C.YELLOW)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "<exec_result>\n"
+                        "exit_code: 2\n"
+                        "stdout:\n\n"
+                        "stderr:\n"
+                        f"命令语法错误（bash -n）：{detail}\n"
+                        "请修正为一条合法的单行命令。\n"
+                        "</exec_result>"
+                    ),
+                })
+                if step_mode or multi_step:
+                    continue
+                return
 
         if loop_enabled and max_steps > 1:
             eprint(f"[{alias}] [step {step}/{max_steps}]", C.CYAN)
@@ -306,7 +376,8 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                             action = "skip"
                         else:
                             cmd = edited
-                            messages[-1]["content"] = cmd
+                            messages[-1]["content"] = (
+                                STEP_MARKER + " " + cmd) if step_mode else cmd
                             action = "run"
             if action == "skip":
                 eprint(f"[{alias}] 已跳过", C.YELLOW)
@@ -322,7 +393,11 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                 })
                 return
 
-        result, out, err, code, shown = _execute(cmd, alias, capture)
+        run_label = (f"[{alias}] Step {step}/{max_steps} - Running"
+                     if (step_mode or multi_step) and max_steps > 1
+                     else f"[{alias}] Running")
+        result, out, err, code, shown = _execute(
+            cmd, alias, capture, spinner=show_spinner, label=run_label)
         _LAST["command"] = cmd
         _LAST["output"] = out
         if not shown:
@@ -338,7 +413,7 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
         messages.append({"role": "user", "content": result})
         spent += len(result)
 
-        if not step_mode:
+        if not step_mode and not multi_step:
             return
         if spent > total_chars:
             eprint(f"[{alias}] 累计输出预算用尽（{total_chars} 字符），停止自动执行",

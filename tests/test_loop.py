@@ -23,7 +23,10 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from woc import loop as L
+from woc.exec import syntax_error
+from woc.gate import dangerous_reason
 from woc.llm import StreamFilter, StreamMode
+from woc.ui import Spinner
 
 BASE = {"enabled": True, "max_steps": 5, "total_chars": 24000, "auto_safe": False}
 
@@ -80,8 +83,10 @@ class FakeHarness:
             return value
         return value, "", 0
 
-    def run(self, messages, loop_cfg=None, enabled=True):
+    def run(self, messages, loop_cfg=None, enabled=True, extra=None):
         cfg = {"loop": loop_cfg or BASE, "prefix": {"alias": "woc"}}
+        if extra:
+            cfg.update(extra)
         L.run_turn(messages, cfg, alias="woc", capture=False, loop_enabled=enabled)
         return messages
 
@@ -144,7 +149,7 @@ class LoopDriverTest(unittest.TestCase):
         self.assertEqual(harness.executed, ["ls -l"])
         self.assertEqual([m["role"] for m in messages],
                          ["user", "assistant", "user", "assistant"])
-        self.assertEqual(messages[1]["content"], "ls -l")
+        self.assertEqual(messages[1]["content"], "#STEP: ls -l")
         self.assertEqual(messages[3]["content"], "#CHAT: 完成")
 
     def test_plain_command_ends_turn(self):
@@ -206,11 +211,11 @@ class ChatMarkerHistoryTest(unittest.TestCase):
         assistant = [m["content"] for m in messages if m["role"] == "assistant"]
         self.assertEqual(assistant, ["#CHAT: 第一轮", "#CHAT: 第二轮"])
 
-    def test_step_command_stays_bare(self):
-        """命令不该被写成 #CHAT:；只有回答保留标记。"""
+    def test_step_marker_is_kept(self):
+        """#STEP: 也要留在历史里；模型会模仿自己上一轮的格式。"""
         with FakeHarness(["#STEP: ls -l", "#CHAT: 完成"]) as harness:
             messages = harness.run([{"role": "user", "content": "q"}])
-        self.assertEqual(messages[1]["content"], "ls -l")
+        self.assertEqual(messages[1]["content"], "#STEP: ls -l")
 
 
 class ProseHintTest(unittest.TestCase):
@@ -329,3 +334,155 @@ class DenyReasonTest(unittest.TestCase):
         with FakeHarness(["mkfs.ext4 /dev/sda1"]) as harness:
             messages = harness.run([{"role": "user", "content": "q"}])
         self.assertIn("格式化文件系统", messages[2]["content"])
+
+
+class StickyLoopTest(unittest.TestCase):
+    """粘性续步：本回合出现过 #STEP: 后，裸命令也继续，直到 #CHAT:。"""
+
+    def test_plain_command_after_step_continues(self):
+        with FakeHarness(["#STEP: ls -l", "pwd", "#CHAT: 完成"]) as harness:
+            messages = harness.run([{"role": "user", "content": "q"}])
+        self.assertEqual(harness.calls, 3)
+        self.assertEqual(harness.executed, ["ls -l", "pwd"])
+        self.assertEqual(messages[-1]["content"], "#CHAT: 完成")
+
+    def test_plain_command_without_step_still_ends_turn(self):
+        with FakeHarness(["ls -l"]) as harness:
+            harness.run([{"role": "user", "content": "q"}])
+        self.assertEqual(harness.calls, 1)
+        self.assertEqual(len(harness.executed), 1)
+
+    def test_step_marker_is_kept_after_edit(self):
+        with FakeHarness(["#STEP: ls -l", "pwd", "#CHAT: 完成"]) as harness:
+            messages = harness.run([{"role": "user", "content": "q"}])
+        assistant = [m["content"] for m in messages if m["role"] == "assistant"]
+        self.assertEqual(assistant[0], "#STEP: ls -l")
+
+    def test_max_steps_from_config_beyond_old_cap(self):
+        cfg = dict(BASE, max_steps=10)
+        replies = ["#STEP: echo %d" % i for i in range(10)]
+        with FakeHarness(replies) as harness:
+            harness.run([{"role": "user", "content": "q"}], loop_cfg=cfg)
+        self.assertEqual(harness.calls, 10)
+        self.assertEqual(len(harness.executed), 10)
+        self.assertIn("10 步上限", harness.stderr.getvalue())
+
+
+class ProtocolGuardTest(unittest.TestCase):
+    def test_toolcall_residue_is_not_executed(self):
+        replies = ["#STEP: ls -l",
+                   "<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"exec_result\">\n"
+                   "placeholder\n</exec_result>",
+                   "#CHAT: 完成"]
+        with FakeHarness(replies) as harness:
+            messages = harness.run([{"role": "user", "content": "q"}])
+        self.assertEqual(harness.executed, ["ls -l"])
+        self.assertEqual(harness.calls, 3)
+        self.assertIn("工具调用", harness.stderr.getvalue())
+        self.assertIn("exit_code: 1", messages[4]["content"])
+
+    def test_dsml_tag_after_valid_command_is_rejected(self):
+        # strip_dsml 会把尾巴上的 DSML 全剥掉，只剩 pwd；守卫必须看 raw 才能拦住它。
+        replies = ["#STEP: ls -l", "pwd\n<｜｜DSML｜｜ parameter>", "#CHAT: 完成"]
+        with FakeHarness(replies) as harness:
+            harness.run([{"role": "user", "content": "q"}])
+        self.assertEqual(harness.executed, ["ls -l"])
+        self.assertEqual(harness.calls, 3)
+
+    def test_syntax_error_is_not_executed(self):
+        replies = ["#STEP: ls -l", "#STEP: echo 'unclosed", "#CHAT: 完成"]
+        with FakeHarness(replies) as harness:
+            messages = harness.run([{"role": "user", "content": "q"}])
+        self.assertEqual(harness.executed, ["ls -l"])
+        self.assertEqual(harness.calls, 3)
+        self.assertIn("语法错误", harness.stderr.getvalue())
+        self.assertIn("exit_code: 2", messages[4]["content"])
+
+    def test_syntax_check_can_be_disabled(self):
+        cfg = dict(BASE)
+        with FakeHarness(["echo 'unclosed"]) as harness:
+            harness.run([{"role": "user", "content": "q"}],
+                        extra={"exec": {"syntax_check": False}})
+        self.assertEqual(harness.executed, ["echo 'unclosed"])
+
+
+class GateTest(unittest.TestCase):
+    ALLOWED = (
+        "printf '%s\\n' 'full reboot' > /tmp/issue.txt",
+        "grep reboot /var/log/syslog",
+        "man reboot",
+        "journalctl -u reboot.target",
+        'git commit -m "fix reboot"',
+        "grep mkfs /proc/filesystems",
+        "ls | grep mkfs",
+        "rm -rf /tmp/x",
+        "echo hi > /dev/null",
+        "systemctl status reboot.target",
+        "awk '{print \"reboot\"}'",
+        "printf '%s\\n' 'mkfs.ext4 /dev/sda' > /tmp/x",
+        "printf '%s\\n' 'rm -rf /' > /tmp/x",
+        'git commit -m "shutdown"',
+        "find . -name reboot",
+    )
+    DENIED = (
+        "systemctl reboot",
+        "sudo reboot",
+        "bash -c 'reboot'",
+        'sh -c "shutdown -h now"',
+        "eval 'reboot'",
+        "find . -exec reboot {} +",
+        "xargs -0 reboot",
+        "timeout 5 reboot",
+        "env FOO=1 reboot",
+        "nice -n 5 reboot",
+        "(reboot)",
+        "echo $(reboot)",
+        "echo `reboot`",
+        "rm -rf /",
+        "rm -rf /*",
+        "mkfs.ext4 /dev/sdb1",
+        "dd if=/dev/zero of=/dev/sda bs=1M",
+        "echo hi > /dev/sda",
+        "tee /dev/sda",
+        "chmod -R 777 /",
+        ":(){ :|:& };:",
+        "printf 'reboot' | bash",
+        "sudo -u root bash -c 'reboot'",
+        "systemctl start reboot.target",
+        "rm -rf /tmp/..",
+        "echo hi > /dev/nvme0n1",
+        "timeout -s KILL 5 reboot",
+        "find . -exec sh -c 'reboot' \\;",
+    )
+
+    def test_allowed_commands(self):
+        for cmd in self.ALLOWED:
+            self.assertIsNone(dangerous_reason(cmd), cmd)
+
+    def test_denied_commands(self):
+        for cmd in self.DENIED:
+            self.assertIsNotNone(dangerous_reason(cmd), cmd)
+
+    def test_reason_labels(self):
+        self.assertEqual(dangerous_reason("rm -rf /"), "递归删除根目录")
+        self.assertEqual(dangerous_reason("mkfs.ext4 /dev/sda1"), "格式化文件系统")
+        self.assertEqual(dangerous_reason("systemctl reboot"), "关机 / 重启")
+
+
+class SyntaxCheckTest(unittest.TestCase):
+    def test_valid_commands(self):
+        for cmd in ("ls -l", "echo hi | grep h", "f=$(find . -type f | head -n1); echo $f"):
+            self.assertIsNone(syntax_error(cmd), cmd)
+
+    def test_invalid_commands(self):
+        for cmd in ("ls -l</br>", "placeholder\n</exec_result>"):
+            self.assertIsNotNone(syntax_error(cmd), cmd)
+
+
+class SpinnerTest(unittest.TestCase):
+    def test_non_tty_is_silent(self):
+        stream = io.StringIO()
+        spin = Spinner("test", stream=stream)
+        spin.start()
+        spin.stop()
+        self.assertEqual(stream.getvalue(), "")
