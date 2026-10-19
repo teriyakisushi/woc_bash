@@ -74,15 +74,20 @@ _CONFIG_MODULE = None
 
 
 def _config_module():
-    """直接加载 woc/config.py，避免为读配置而导入整个 woc 包。"""
+    """加载仓库里的 woc/config.py。
+
+    config.py 里有 `from . import ...` 的相对导入（budget / debug），
+    所以必须按包模块导入；按单文件加载会直接 ImportError。
+    把仓库根目录插到 sys.path 最前面，保证用的是当前仓库，而不是环境里
+    可能安装过的旧副本。
+    """
     global _CONFIG_MODULE
     if _CONFIG_MODULE is None:
-        import importlib.util
-        path = Path(__file__).resolve().parent / PACKAGE_SRC / "config.py"
-        spec = importlib.util.spec_from_file_location("woc_config", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _CONFIG_MODULE = module
+        import importlib
+        root = str(Path(__file__).resolve().parent)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        _CONFIG_MODULE = importlib.import_module(f"{PACKAGE_SRC}.config")
     return _CONFIG_MODULE
 
 
@@ -461,7 +466,7 @@ def verify(target_dir: Path, rc_files: list[Path], names: dict) -> None:
             )
             found = out.stdout.strip()
         except Exception as e:
-            log(f"验证 {name} 跳过（{e}）")
+            log(f"验证 {cmd_name} 跳过（{e}）")
             found = ""
 
         if found:
