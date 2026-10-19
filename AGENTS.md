@@ -68,7 +68,7 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 - 文档与注释用中文，标识符用英文。
 - 日志前缀统一走 `[prefix].alias`，**不要硬编码 `[woc]`**。
 - 改安全逻辑（`woc/gate.py` 的 `is_dangerous` / `is_root_shell` / `risk_tier`）必须同步
-  `tests/test_loop.py` 的 `GateTest`。
+  `tests/test_gate.py` 的 `GateTest`。
 - 新增配置项放在 `woc/config.py` 对应小节，并支持环境变量覆盖。
 - 不要为了少按一次回车放宽 `risk_tier` 的白名单。
 
