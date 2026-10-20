@@ -101,6 +101,35 @@ min(max_input_chars, (context_tokens - max_output_tokens - system 段) × 2)
 
 换算按保守的 2 字符/token；下限保底 1000 字符。
 
+## `[thinking]`
+
+DeepSeek 的思考模式**服务端默认开启**（effort 默认 `high`），这里默认 **`false`**：
+思考模式下服务端会忽略 `temperature`（`temperature = 0` 等于没写），而 `woc` 要的是
+"一条命令 + 低延迟"，思考消耗的 token 还会和回答抢 `[budget] max_output_tokens`。
+
+| 键 | 默认 | 环境变量 | 说明 |
+|---|---|---|---|
+| `enabled` | `false` | `WOC_THINKING` | 显式下发 `{"thinking": {"type": "enabled" \| "disabled"}}` |
+| `effort` | `high` | `WOC_THINKING_EFFORT` | `low` / `high` / `max`，仅在 `enabled = true` 时下发 |
+
+开启前把预算和超时一起调大，否则容易看到回答被截断或读超时：
+
+```toml
+# 根级
+timeout = 90
+
+[thinking]
+enabled = true
+effort = "low"
+
+[budget]
+max_output_tokens = 16384   # 思考 + 回答共用
+```
+
+关掉时也会显式下发 `{"type": "disabled"}`——不发字段等于跟随服务端默认值（开启）。
+思维链（`reasoning_content`）不显示、不进会话历史；`WOC_DEBUG=1` 时
+`usage` 行会多一个 `reasoning=` 字段（服务端返回了才显示）。
+
 ## `[debug]`
 
 | 键 | 默认 | 环境变量 | 说明 |
@@ -169,6 +198,10 @@ syntax_check = true
 [ui]
 spinner = true
 fold_lines = 25
+
+[thinking]
+enabled = false
+effort = "high"
 
 [pipe]
 enabled = true

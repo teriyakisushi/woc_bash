@@ -37,6 +37,9 @@ def usage_line(usage):
     parts = [f"prompt={usage.get('prompt_tokens', '?')}",
              f"completion={usage.get('completion_tokens', '?')}",
              f"total={usage.get('total_tokens', '?')}"]
+    details = usage.get("completion_tokens_details")
+    if isinstance(details, dict) and "reasoning_tokens" in details:
+        parts.append(f"reasoning={details.get('reasoning_tokens')}")
     if "prompt_cache_hit_tokens" in usage:
         parts.append(f"cache_hit={usage.get('prompt_cache_hit_tokens')}")
     if "prompt_cache_miss_tokens" in usage:

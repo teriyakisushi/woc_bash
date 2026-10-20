@@ -74,6 +74,8 @@ export WOC_PIPE_MAX_CHARS="32000"   # 等价于 [pipe] max_chars
 export WOC_MAX_INPUT_CHARS="32000"  # 等价于 [budget] max_input_chars
 export WOC_CONTEXT_TOKENS="64000"   # 等价于 [budget] context_tokens
 export WOC_FOLD_LINES="25"          # 等价于 [ui] fold_lines
+export WOC_THINKING="1"             # 等价于 [thinking] enabled = true（默认关闭）
+export WOC_THINKING_EFFORT="low"    # 等价于 [thinking] effort（low/high/max）
 export WOC_DEBUG="1"                # 等价于 [debug] enabled = true
 export WOC_SESSION_PERSIST="0"      # 等价于 [session] persist = false
 export WOC_SESSION_MAX_MESSAGES="40"
@@ -114,6 +116,10 @@ syntax_check = true
 [ui]
 spinner = true
 
+[thinking]
+enabled = false            # DeepSeek 服务端默认开启，这里默认关闭
+effort = "high"            # low/high/max，仅 enabled 时下发
+
 [pipe]
 enabled = true
 # max_chars = 32000        # 可选：默认跟随 budget.max_input_chars
@@ -150,6 +156,34 @@ max_chars = 60000
 所以把 `max_input_chars` 调到很大也不会撞上下文。
 旧的根级 `output_maxtokens` 和 `WOC_OUTPUT_MAXTOKENS` 仍然可用（等同于
 `[budget] max_output_tokens`），新配置建议放到 `[budget]`。
+
+### 思考模式（`[thinking]`）
+
+DeepSeek 的思考模式**服务端默认就是开启的**（effort 默认 `high`），这里默认**关掉**：
+
+- 思考模式下服务端会**忽略 `temperature`**
+  （[官方文档](https://api-docs.deepseek.com/guides/thinking_mode/)），
+  而本工具靠 `temperature = 0` 换确定性——开着思考，请求里那个 0 等于没写；
+- `woc` 是"敲一句话、要一条命令"的交互工具，思考带来的首 token 延迟正好压在关键路径上；
+- 思考消耗的 token 计入 `[budget] max_output_tokens`（默认 4096），可能把回答挤没。
+
+想要更聪明、愿意等，就打开；代价按需要认：
+
+```toml
+# 根级
+timeout = 90                 # 首 token 会明显变慢，30s 容易读超时
+
+[thinking]
+enabled = true
+effort = "low"               # low / high / max；默认 high
+
+[budget]
+max_output_tokens = 16384    # 思考 + 回答共用这个上限
+```
+
+关掉时请求里会显式带上 `{"thinking": {"type": "disabled"}}`，而不是"不发这个字段"——
+不发就是跟随服务端默认值，哪天默认值变了行为会跟着漂。思维链（`reasoning_content`）
+不会显示，也不会进 `wocc` 的会话历史，只有最终回答算数。
 
 ### 调试与观测（`[debug]`）
 

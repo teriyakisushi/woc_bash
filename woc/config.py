@@ -39,6 +39,13 @@ EXEC_DEFAULTS = {"syntax_check": True}
 # [ui] 段：等待模型/执行命令时的 loading（仅 tty 生效）。
 UI_DEFAULTS = {"spinner": True, "fold_lines": 25}
 
+# [thinking] 段：思考模式。DeepSeek 服务端默认**开启**（effort=high），但那套默认
+# 与本工具的取舍相反：思考模式下服务端会忽略 temperature，而这里靠 temperature=0
+# 换确定性；woc 要的是"一条命令 + 低延迟"，不是"多想半分钟"。所以默认关闭。
+THINKING_DEFAULTS = {"enabled": False, "effort": "high"}
+# 服务端还接受 none（等价于关闭）；这里只开放"思考力度"，关闭统一走 enabled。
+THINKING_EFFORTS = ("low", "high", "max")
+
 # [pipe] 段：标准输入不是终端时，把 stdin 当数据问答（只回答、不执行命令）。
 # max_chars 默认 None：不单独配置时跟随 [budget] max_input_chars。
 PIPE_DEFAULTS = {"enabled": True, "max_chars": None}
@@ -112,6 +119,16 @@ def _file_positive_int(value, default, notes, name):
     return number
 
 
+def _thinking_effort(value, notes, source):
+    """思考力度只认 low/high/max；写错就回落默认值并提示，不静默。"""
+    effort = str(value).strip().lower()
+    if effort in THINKING_EFFORTS:
+        return effort
+    notes.append(f"{source}={effort!r} 非法（可选 "
+                 f"{'/'.join(THINKING_EFFORTS)}），已忽略")
+    return THINKING_DEFAULTS["effort"]
+
+
 def prefix(cfg, key="woc_prefix"):
     """取 [prefix] 里的命令名/别名；缺失时回落到默认值。"""
     value = (cfg.get("prefix") or {}).get(key)
@@ -147,6 +164,19 @@ def fold_lines(cfg):
     except (TypeError, ValueError):
         return UI_DEFAULTS["fold_lines"]
     return max(value, 0)
+
+
+def thinking_enabled(cfg):
+    """是否开启思考模式（[thinking] enabled）。"""
+    return bool((cfg.get("thinking") or {}).get(
+        "enabled", THINKING_DEFAULTS["enabled"]))
+
+
+def thinking_effort(cfg):
+    """思考力度（[thinking] effort）：low/high/max，仅在开启时下发。"""
+    value = str((cfg.get("thinking") or {}).get(
+        "effort", THINKING_DEFAULTS["effort"])).strip().lower()
+    return value if value in THINKING_EFFORTS else THINKING_DEFAULTS["effort"]
 
 
 def session_settings(cfg):
@@ -203,7 +233,8 @@ def load_config(path=None):
         wocc_prefix = "qwee"
         woc_chat_prefix = "qwe_chat"
 
-    以及 [sudo] / [context] / [exec] / [ui] / [pipe] / [budget] / [debug] 段：
+    以及 [sudo] / [context] / [exec] / [ui] / [pipe] / [budget]
+    / [thinking] / [debug] 段：
         [sudo]
         capture_output = false
 
@@ -216,6 +247,10 @@ def load_config(path=None):
         [ui]
         spinner = true
         fold_lines = 25
+
+        [thinking]              # DeepSeek 服务端默认开启，这里默认关闭
+        enabled = false
+        effort = "high"         # low/high/max，仅 enabled 时下发
 
         [pipe]
         enabled = true
@@ -290,6 +325,13 @@ def load_config(path=None):
             "fold_lines": _env_positive_int(
                 "WOC_FOLD_LINES", UI_DEFAULTS["fold_lines"], notes),
         },
+        "thinking": {
+            "enabled": _env_bool("WOC_THINKING", THINKING_DEFAULTS["enabled"]),
+            "effort": _thinking_effort(
+                os.environ.get("WOC_THINKING_EFFORT",
+                               THINKING_DEFAULTS["effort"]),
+                notes, "环境变量 WOC_THINKING_EFFORT"),
+        },
         "pipe": {
             "enabled": _env_bool("WOC_PIPE", PIPE_DEFAULTS["enabled"]),
             "max_chars": _env_optional_positive_int(
@@ -351,6 +393,14 @@ def load_config(path=None):
                         cfg["ui"]["fold_lines"] = _file_positive_int(
                             value, UI_DEFAULTS["fold_lines"], notes,
                             "ui.fold_lines")
+                    continue
+                if section == "thinking":
+                    if key == "enabled" and "WOC_THINKING" not in os.environ:
+                        cfg["thinking"]["enabled"] = _to_bool(value)
+                    elif (key == "effort"
+                          and "WOC_THINKING_EFFORT" not in os.environ):
+                        cfg["thinking"]["effort"] = _thinking_effort(
+                            value, notes, "配置项 thinking.effort")
                     continue
                 if section == "budget":
                     if (key == "context_tokens"

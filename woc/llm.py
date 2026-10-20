@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 
 from . import budget, debug
-from .config import load_config
+from .config import load_config, thinking_effort, thinking_enabled
 from .context import build_messages
 from .prompts import SYSTEM_PROMPT
 
@@ -116,6 +116,10 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
         debug.log("request: model=%s messages=%d chars=%d max_tokens=%d timeout=%ss"
                   % (cfg["model"], len(messages), total_chars,
                      budget.output_tokens(cfg), cfg["timeout"]))
+        if thinking_enabled(cfg):
+            debug.log("thinking: on effort=%s" % thinking_effort(cfg))
+        else:
+            debug.log("thinking: off")
         debug.log(budget.describe(cfg))
     payload = {
         "model": cfg["model"],
@@ -129,6 +133,13 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
         # 尽量不让模型把工具调用的控制标记写进正文；sanitize 里还有一层兜底。
         "stop": ["<｜｜DSML｜｜", "</｜｜DSML｜｜>", "<||DSML||", "</||DSML||>"],
     }
+    # 思考模式：DeepSeek 服务端默认开启（effort=high），这里显式下发，
+    # 行为不跟着服务端默认值跑；关闭时也要发，否则"默认关闭"会被默认值推翻。
+    if thinking_enabled(cfg):
+        payload["thinking"] = {"type": "enabled"}
+        payload["reasoning_effort"] = thinking_effort(cfg)
+    else:
+        payload["thinking"] = {"type": "disabled"}
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
