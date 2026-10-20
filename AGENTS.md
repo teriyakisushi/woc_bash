@@ -48,7 +48,8 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 | `woc/loop.py` | agentic loop：`risk_tier`、`#STEP:` 粘性状态机、语法预检、输出折叠、`:more` |
 | `woc/cli/multi.py` | `wocc` 会话循环（用户输入、`:q` / `:more` / `:last`） |
 | `woc/cli/single.py` | 单轮 `woc`（确认后 `os.execvp`） |
-| `woc/cli/chat.py` | `woc -c` 聊天（Markdown 渲染） |
+| `woc/cli/chat.py` | `woc -c` 聊天（Markdown 渲染，SSE 增量逐行上屏） |
+| `woc/markdown.py` | 终端 Markdown 渲染：`render_markdown()` 一次性、`MarkdownStream` 流式 |
 | `woc/cli/completion.py` | `--completion bash\|zsh` 补全脚本生成 |
 | `woc/context.py` | 模板两层注入、`<environment>`、目录快照、`messages_prefix()` |
 | `woc/llm.py` | SSE 流式 + `StreamFilter`（`#CHAT:` / `#STEP:` 识别） |

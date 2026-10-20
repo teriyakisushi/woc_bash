@@ -18,3 +18,6 @@ HANDOFF*.md
 
 # 工具/编辑器留下的临时副本
 *dsh-ops-*
+
+# 从 Windows 拷过来的文件偶尔会带着 NTFS 备用数据流的影子文件
+*:Zone.Identifier

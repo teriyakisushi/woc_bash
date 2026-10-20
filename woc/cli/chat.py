@@ -4,7 +4,7 @@ import sys
 from ..colors import C, cerr, eprint, interactive_input
 from ..config import load_config, prefix, spinner as spinner_enabled
 from ..llm import LLMError, call_llm_messages_stream
-from ..markdown import render_markdown
+from ..markdown import MarkdownStream
 from ..sanitize import strip_dsml
 from ..ui import Spinner
 
@@ -67,28 +67,47 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
 
         messages.append({"role": "user", "content": question})
         chunks = []
+        state = {"started": False}
+
+        def write(text):
+            sys.stdout.write(text)
+            sys.stdout.flush()
+
+        # 边收边渲染：SSE 一到就显示，不再攒到整条回答收完。
+        # 行在显示前先过 strip_dsml，控制标记不会半截漏到屏幕上。
+        renderer = MarkdownStream(
+            colors, lambda line: write(line + "\n"), sanitize=strip_dsml)
         spin = Spinner(f"[{alias}] Thinking", enabled=spinner_enabled(cfg))
+
+        def on_chunk(text):
+            if not state["started"]:
+                state["started"] = True
+                spin.stop()          # 先清掉 loading 行，再往 stdout 写正文
+                write("\n" + colors("[assistant] ", C.GREEN, C.BOLD))
+            chunks.append(text)
+            renderer.feed(text)
+
         spin.start()
         try:
             call_llm_messages_stream(
-                cfg=cfg, messages=messages, on_chunk=chunks.append
+                cfg=cfg, messages=messages, on_chunk=on_chunk
             )
         except LLMError as exc:
             spin.stop()
+            if state["started"]:
+                write("\n")         # 流到一半断了：先换行，别把错误提示接在正文后面
             messages.pop()
             eprint(f"[{alias}] LLM 调用失败: {exc}", C.RED)
             continue
         finally:
             spin.stop()
 
-        sys.stdout.write("\n" + colors("[assistant] ", C.GREEN, C.BOLD))
-        sys.stdout.flush()
+        renderer.finish()
         answer = strip_dsml("".join(chunks))
         if not answer:
             messages.pop()
             eprint(f"[{alias}] LLM 未返回内容", C.RED)
             continue
-        print(render_markdown(answer, colors))
         print()
         messages.append({"role": "assistant", "content": answer})
         if one_shot:
