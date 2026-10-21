@@ -8,7 +8,7 @@ from ..markdown import MarkdownStream
 from ..sanitize import strip_dsml
 from ..ui import Spinner
 
-CHAT_SYSTEM_PROMPT = """You are {name}, a helpful terminal assistant.
+CHAT_SYSTEM_PROMPT = """You are a helpful assistant.
 Answer the user's questions in their language. Use Markdown when it improves
 readability. The current working directory is included as context. Do not
 pretend that you can inspect files unless their contents are provided.
