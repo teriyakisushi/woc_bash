@@ -84,6 +84,7 @@ enabled = true
 
 [search]
 enabled = true
+base_url = ""
 count = 5
 max_searches = 1
 max_chars = 6000

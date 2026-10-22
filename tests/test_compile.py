@@ -93,5 +93,53 @@ class ConfigTemplateTest(unittest.TestCase):
         self.assertEqual(cfg["budget"]["context_tokens"], 64000)
 
 
+class ConfigTemplateConsistencyTest(unittest.TestCase):
+    """模板必须和 config.py 的默认值一一对应。
+
+    少一个键：老用户升级安装器也拿不到它（内置默认值兜着，但没人知道能配）；
+    多一个键：没人消费，纯噪音。所以两边都按集合比。
+    """
+
+    EXPECTED = {
+        "": {"api_base", "api_key", "model", "timeout"},
+        "prefix": {"alias", "woc_prefix", "wocc_prefix", "woc_chat_prefix"},
+        "sudo": {"capture_output"},
+        "context": {"ls_on_start"},
+        "loop": {"enabled", "max_steps", "total_chars", "auto_safe"},
+        "exec": {"syntax_check"},
+        "ui": {"spinner", "fold_lines"},
+        "thinking": {"enabled", "effort"},
+        "pipe": {"enabled"},
+        "search": {"enabled", "base_url", "count", "max_searches",
+                   "max_chars", "timeout"},
+        "budget": {"context_tokens", "max_output_tokens", "max_input_chars"},
+        "debug": {"enabled"},
+        "session": {"persist", "max_messages", "max_chars"},
+    }
+    # 默认值表示"跟随别的配置"的键：写死进文件反而会覆盖掉跟随关系。
+    OPTIONAL = {("pipe", "max_chars")}
+
+    def test_template_keys_match_defaults(self):
+        module = load_compile_module()
+        blocks = {name: {key for key, _line in entries}
+                  for name, entries in module._template_sections()}
+        expected = {name: set(keys) for name, keys in self.EXPECTED.items()}
+        for name, key in self.OPTIONAL:
+            expected[name].discard(key)
+        self.assertEqual(blocks, expected)
+
+    def test_template_values_are_the_defaults(self):
+        """模板里的值必须等于内置默认值，否则"补进配置"会悄悄改行为。"""
+        module = load_compile_module()
+        config = module._config_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            module.merge_config_template(path)
+            with mock.patch.dict(os.environ, {"WOC_API_KEY": ""}, clear=True):
+                from_template = config.load_config(path=str(path))
+                defaults = config.load_config(path="/nonexistent/config.toml")
+        self.assertEqual(from_template, defaults)
+
+
 if __name__ == "__main__":
     unittest.main()

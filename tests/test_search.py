@@ -370,6 +370,66 @@ class ChatSearchTest(unittest.TestCase):
             chat.woc_chat_main(argv)
         return out.getvalue(), err.getvalue(), llm, found
 
+    def run_chat_inputs(self, argv, inputs, replies, cfg=None):
+        """交互模式：依次喂会话内命令/问题，返回（stdout, stderr, llm, 搜索词）。"""
+        cfg = cfg or make_cfg()
+        llm = FakeLLM(replies)
+        found = []
+
+        def fake_search(query, _cfg, ori_question=None):
+            found.append(query)
+            return [search_mod._normalize(raw_hit(1))]
+
+        feeds = iter(inputs)
+        stdin = mock.MagicMock()
+        stdin.isatty.return_value = True
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "stdin", stdin), \
+                mock.patch.object(chat, "load_config", return_value=cfg), \
+                mock.patch.object(chat, "interactive_input",
+                                  lambda *a, **k: next(feeds)), \
+                mock.patch.object(chat, "call_llm_messages_stream", llm), \
+                mock.patch.object(search_mod, "search", fake_search), \
+                redirect_stdout(out), redirect_stderr(err):
+            chat.woc_chat_main(argv)
+        return out.getvalue(), err.getvalue(), llm, found
+
+    def test_sources_line_after_model_search(self):
+        _out, err, _llm, _found = self.run_chat(
+            ["问题"],
+            [(StreamMode.SEARCH, "#SEARCH: 关键词"),
+             (StreamMode.CHAT, "答案\n")])
+        self.assertIn("来源: [1] example.com", err)
+
+    def test_sources_line_after_manual_search(self):
+        _out, err, _llm, _found = self.run_chat(
+            [":search", "关键词"], [(StreamMode.CHAT, "答案\n")])
+        self.assertIn("来源: [1] example.com", err)
+
+    def test_no_sources_line_without_search(self):
+        _out, err, _llm, _found = self.run_chat(
+            ["问题"], [(StreamMode.CHAT, "答案\n")])
+        self.assertNotIn("来源:", err)
+
+    def test_toggle_off_blocks_model_search(self):
+        _out, err, llm, found = self.run_chat_inputs(
+            [], [":search off", "问题", ":q"],
+            [(StreamMode.SEARCH, "#SEARCH: 不该搜")])
+        self.assertEqual(found, [])
+        self.assertIn("已关闭模型自主搜索", err)
+        self.assertIn("关掉了自主搜索", err)
+        # 系统提示里那段 hint 已经被摘掉
+        self.assertNotIn("WEB SEARCH", llm.calls[0][0]["content"])
+
+    def test_toggle_on_restores_after_no_search_flag(self):
+        _out, err, llm, found = self.run_chat_inputs(
+            ["--no-search"], [":search on", "问题", ":q"],
+            [(StreamMode.SEARCH, "#SEARCH: 搜一下"),
+             (StreamMode.CHAT, "答案\n")])
+        self.assertEqual(found, ["搜一下"])
+        self.assertIn("已开启模型自主搜索", err)
+        self.assertIn("WEB SEARCH", llm.calls[0][0]["content"])
+
     def test_search_is_on_by_default(self):
         # 不加任何开关：模型要搜就搜，用户看到的只有答案。
         out, err, llm, found = self.run_chat(
@@ -567,8 +627,33 @@ class WoccSearchCommandTest(unittest.TestCase):
         self.assertEqual(found, ["关键词"])
         self.assertEqual(len(rounds), 1, ":search 之后应当马上跑一回合")
         self.assertIn("已搜索", err.getvalue())
+        self.assertIn("来源: [1] example.com", err.getvalue())
         self.assertTrue(any("<search_results" in str(item.get("content"))
                             for item in messages))
+
+
+class SourcesTest(unittest.TestCase):
+    def test_host_list(self):
+        hits = [search_mod._normalize(raw_hit(1)),
+                search_mod._normalize(raw_hit(2))]
+        self.assertEqual(search_mod.format_sources(hits),
+                         "[1] example.com · [2] example.com")
+
+    def test_falls_back_to_site_then_title(self):
+        hits = [{"url": "", "site": "Example", "title": "T"},
+                {"url": "", "site": "", "title": "标题"}]
+        self.assertEqual(search_mod.format_sources(hits),
+                         "[1] Example · [2] 标题")
+
+    def test_limit_marks_the_rest(self):
+        hits = [search_mod._normalize(raw_hit(i)) for i in range(1, 8)]
+        text = search_mod.format_sources(hits, limit=3)
+        self.assertTrue(text.endswith("+4"), text)
+        self.assertNotIn("[4]", text)
+
+    def test_empty(self):
+        self.assertEqual(search_mod.format_sources([]), "")
+        self.assertEqual(search_mod.format_sources(None), "")
 
 
 class LazyImportTest(unittest.TestCase):

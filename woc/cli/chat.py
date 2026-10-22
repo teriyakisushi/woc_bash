@@ -94,13 +94,39 @@ def _split_search(text):
     return query, "\n".join(lines[consumed:]).strip()
 
 
-def _answer(messages, cfg, alias, colors, search_on, settings, rollback=True):
+def _toggle_search(messages, alias, current, wanted):
+    """会话内开关模型自主搜索：改的是 system prompt 里那段 hint。
+
+    这一下改的是稳定前缀，本会话的前缀缓存会重建一次 —— 只影响这一次，
+    换来的是"不想花钱/不想它联网"时不用重启进程。
+    """
+    if wanted == current:
+        eprint(f"[{alias}] 模型自主搜索已经是{'开启' if current else '关闭'}状态",
+               C.GREEN)
+        return current
+
+    content = messages[0]["content"]
+    if wanted:
+        if not content.endswith(SEARCH_HINT):
+            messages[0]["content"] = content + SEARCH_HINT
+        eprint(f"[{alias}] 已开启模型自主搜索（前缀缓存会重建一次）", C.GREEN)
+    else:
+        if content.endswith(SEARCH_HINT):
+            messages[0]["content"] = content[:-len(SEARCH_HINT)]
+        eprint(f"[{alias}] 已关闭模型自主搜索（{SEARCH_COMMAND} on 恢复；"
+               f"{SEARCH_COMMAND} <关键词> 仍然可用）", C.GREEN)
+    return wanted
+
+
+def _answer(messages, cfg, alias, colors, search_on, settings, rollback=True,
+            sources=None):
     """跑一轮回答；模型用 `#SEARCH:` 时最多续 `max_searches` 轮。
 
     messages 必须已经以 user 消息结尾。`rollback` 为真时，失败的回合会把最后
     那条 user 消息弹掉（保持历史干净）；`:search` 走的是 rollback=False ——
     已经花掉一次搜索，失败也把结果留在上下文里，用户再问一句就能用。
     """
+    sources = list(sources or [])
     turns = 0
     while True:
         can_search = search_on and turns < settings["max_searches"]
@@ -125,12 +151,13 @@ def _answer(messages, cfg, alias, colors, search_on, settings, rollback=True):
             if hits is None:
                 eprint(f"[{alias}] 搜索失败，已让模型改用自有知识: {error}", C.RED)
             # 成功/空结果都不刷屏：命中列表只在 WOC_DEBUG=1 时打印
-            # （见 woc/search.py 的 describe）。用户看到的应该只有答案。
+            # （见 woc/search.py 的 describe）。用户看到的只有答案 + 一行来源。
             messages.append({
                 "role": "assistant",
                 "content": StreamFilter.SEARCH_MARKER + " " + query,
             })
             messages.append({"role": "user", "content": block})
+            sources = hits or []
             turns += 1
             continue
 
@@ -145,7 +172,7 @@ def _answer(messages, cfg, alias, colors, search_on, settings, rollback=True):
                        C.YELLOW)
             else:
                 eprint(f"[{alias}] 模型想搜索（{query}），但本会话关掉了自主搜索；"
-                       f"去掉 --no-search，或直接用 {SEARCH_COMMAND} <关键词>",
+                       f"{SEARCH_COMMAND} on 打开，或直接用 {SEARCH_COMMAND} <关键词>",
                        C.YELLOW)
             return False
 
@@ -157,6 +184,9 @@ def _answer(messages, cfg, alias, colors, search_on, settings, rollback=True):
 
         print()
         messages.append({"role": "assistant", "content": answer})
+        if sources:
+            from ..search import print_sources       # 延迟导入：默认路径不加载
+            print_sources(alias, sources)
         return True
 
 
@@ -167,7 +197,7 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
     alias = prefix(cfg, "alias")
 
     # 搜索默认开启（模型自己判断要不要搜），只认开头的开关：
-    # --no-search 关掉本会话的自主搜索；--search 是显式打开（保留给脚本/习惯用法）。
+    # --no-search 关掉本会话的自主搜索；--search 强制打开（覆盖 [search] enabled）。
     args = list(argv)
     flag_search = None
     while args and args[0] in ("--search", "--no-search"):
@@ -182,9 +212,10 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
             print(f"用法: {name} [--no-search] [首轮问题]")
             print(f"也可以由 {prefix(cfg, 'woc_prefix')} -c 启动。")
         print("进入支持 Markdown 渲染的多轮聊天。输入 :q / exit / quit 退出。")
-        print("  --search          允许模型按需搜索网页（默认已开启）")
+        print("  --search          强制开启模型自主搜索（默认已开启，覆盖配置）")
         print("  --no-search       本次会话关闭模型自主搜索；:search 仍然可用")
         print(f"  {SEARCH_COMMAND} <关键词>   搜一次网页，直接让模型根据结果回答")
+        print(f"  {SEARCH_COMMAND} off / on  本次会话开关模型自主搜索")
         raise SystemExit(0)
 
     one_shot = bool(args) and not sys.stdin.isatty()
@@ -207,7 +238,7 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
     eprint(f"[{alias}] 已进入聊天，当前目录: {cwd}", C.GREEN, C.BOLD)
     if search_on:
         eprint(f"[{alias}] 需要时会自动搜索网页（--no-search 关闭；"
-               f"{SEARCH_COMMAND} <关键词> 可手动指定）", C.GREEN)
+               f"{SEARCH_COMMAND} off 也可关）", C.GREEN)
     else:
         eprint(f"[{alias}] 模型自主搜索已关闭；{SEARCH_COMMAND} <关键词> 仍可手动搜索",
                C.GREEN)
@@ -236,11 +267,19 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
         # 但 :searchfoo 不是（那是问题）。
         words = question.split(maxsplit=1)
         if words and words[0] == SEARCH_COMMAND:
+            arg = question[len(SEARCH_COMMAND):].strip().lower()
+            if arg in ("on", "off"):
+                search_on = _toggle_search(messages, alias, search_on,
+                                           arg == "on")
+                if one_shot:
+                    return
+                continue
             from ..search import search_command     # 延迟导入：默认路径不加载
             # 搜到结果就直接让模型回答，不再要用户补一句"go ahead"。
-            if search_command(question, messages, cfg, alias):
+            hits = search_command(question, messages, cfg, alias)
+            if hits is not None:
                 _answer(messages, cfg, alias, colors, search_on, settings,
-                        rollback=False)
+                        rollback=False, sources=hits)
             if one_shot:
                 return
             continue

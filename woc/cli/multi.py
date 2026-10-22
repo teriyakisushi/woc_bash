@@ -18,7 +18,7 @@ HELP_LINES = (
     (":steps", "本回合的步骤审计"),
     (":explain", "解释上一条命令与输出（只发一次请求，不进历史）"),
     (":again", "重跑上一条命令（仍需确认）"),
-    (":search <关键词>", "搜索网页，并让模型根据结果直接回答"),
+    (":search <关键词>", "搜索网页，并让模型根据结果直接回答（附来源）"),
     (":help", "显示这段帮助"),
 )
 
@@ -184,14 +184,19 @@ def wocc_main(argv):
         # 人工指定搜索内容：搜到结果就直接接着让模型回答，不再等用户补一句。
         # 和 `woc -c` 共用 woc/search.py 里的同一份实现。
         start = len(messages)
-        searched = False
+        sources = None
         words = user_input.split(maxsplit=1)
         if words and words[0] == ":search":
-            from ..search import search_command      # 延迟导入：默认路径不加载
-            if not search_command(user_input, messages, cfg, alias):
+            arg = user_input[len(":search"):].strip().lower()
+            if arg in ("on", "off"):
+                # wocc 没有"模型自主搜索"，也就没有开关；明说一句，别去搜 "off"。
+                eprint(f"[{alias}] wocc 只支持人工 :search，没有自主搜索开关", C.YELLOW)
                 continue
-            searched = True
-        if not searched:
+            from ..search import search_command      # 延迟导入：默认路径不加载
+            sources = search_command(user_input, messages, cfg, alias)
+            if sources is None:
+                continue
+        else:
             messages.append({"role": "user", "content": user_input})
         try:
             run_turn(messages, cfg, alias=alias, capture=capture,
@@ -202,6 +207,9 @@ def wocc_main(argv):
             # run_turn 已经打印过原因；回滚本回合追加的消息，保持上下文干净。
             del messages[start:]
             continue
+        if sources:
+            from ..search import print_sources       # 延迟导入：默认路径不加载
+            print_sources(alias, sources)
 
         # 每回合结束后落盘：崩溃/断线时最多丢一个回合。
         if store["persist"]:

@@ -15,6 +15,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 from . import debug
 from .colors import C, eprint
@@ -303,12 +304,43 @@ def describe(alias, hits):
         debug.log("  [%d] %s %s" % (index, hit["title"] or "(无标题)", hit["url"]))
 
 
-def search_command(user_input, messages, cfg, alias, ask=True):
-    """处理 `:search <关键词>`：搜一次、把结果压进上下文，返回是否该继续回答。
+def format_sources(hits, limit=5):
+    """把命中列表压成一行来源：`[1] example.com · [2] github.com`。
 
-    返回 True 表示结果已经进上下文，调用方**应当马上跑一轮模型回答**（这就是
-    `:search` 的语义：搜完直接答，不再要用户补一句"go ahead"）；False 表示用法
-    错误或搜索失败，什么都没加。
+    只用域名（或站点名），不铺 URL：命中列表留给 `WOC_DEBUG=1`，这里要的是
+    "这个答案有没有联网、引的是哪几家"，一行就够。
+    """
+    hits = hits or []
+    parts = []
+    for index, hit in enumerate(hits[:limit], 1):
+        host = ""
+        if hit.get("url"):
+            host = urlsplit(hit["url"]).netloc
+        label = host or hit.get("site") or hit.get("title") or ""
+        if label:
+            parts.append(f"[{index}] {label}")
+    if len(hits) > limit:
+        parts.append(f"+{len(hits) - limit}")
+    return " · ".join(parts)
+
+
+def print_sources(alias, hits):
+    """回答结束后打印一行来源。没有命中就不打印。
+
+    这是"静默搜索"和"可审计"之间的折中：搜索过程不刷屏，但答案有没有联网
+    依据、引了哪些站，用户始终看得见。
+    """
+    line = format_sources(hits or [])
+    if line:
+        eprint(f"[{alias}] 来源: {line}", C.GRAY)
+
+
+def search_command(user_input, messages, cfg, alias, ask=True):
+    """处理 `:search <关键词>`：搜一次、把结果压进上下文，返回命中列表。
+
+    返回非 None 表示结果已经进上下文，调用方**应当马上跑一轮模型回答**（这就是
+    `:search` 的语义：搜完直接答，不再要用户补一句"go ahead"）；返回 None 表示
+    用法错误或搜索失败，什么都没加。空列表也算"搜过了"，照样该回答。
 
     `woc -c` 与 `wocc` 共用这一份实现。
     """
@@ -316,12 +348,12 @@ def search_command(user_input, messages, cfg, alias, ask=True):
     if not query:
         eprint(f"[{alias}] 用法: {COMMAND} <关键词>", C.YELLOW)
         eprint(f"[{alias}] 搜完会直接把结果交给模型回答", C.GREEN)
-        return False
+        return None
 
     hits, block, error = perform(query, cfg, alias, ask=ask)
     if hits is None:
         eprint(f"[{alias}] 搜索失败: {error}", C.RED)
-        return False
+        return None
 
     describe(alias, hits)
     messages.append({"role": "user", "content": block})
@@ -329,4 +361,4 @@ def search_command(user_input, messages, cfg, alias, ask=True):
         eprint(f"[{alias}] 已搜索「{query}」，{len(hits)} 条结果", C.GREEN)
     else:
         eprint(f"[{alias}] 没有搜到「{query}」的结果", C.YELLOW)
-    return True
+    return hits
