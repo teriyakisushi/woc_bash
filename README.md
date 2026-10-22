@@ -16,6 +16,8 @@ Shell 命令，也可以回答问题、执行命令并在多轮会话中继续�
 - `WOC_DEBUG=1` 可观测 usage、前缀缓存命中与每次请求的规模。
 - 会话内可用 `:steps` 审计本回合步骤、`:explain` 解释上一条命令；
   `wocc --last-session` 能接回上一次会话。
+- `woc -c --search` 让聊天模式按需联网搜索；会话里也可以用 `:search <关键词>`
+  人工指定搜索内容。
 
 ## 环境要求
 
@@ -80,6 +82,9 @@ export WOC_DEBUG="1"                # 等价于 [debug] enabled = true
 export WOC_SESSION_PERSIST="0"      # 等价于 [session] persist = false
 export WOC_SESSION_MAX_MESSAGES="40"
 export WOC_SESSION_MAX_CHARS="60000"
+export WOC_SEARCH="1"               # 等价于 [search] enabled = true
+export WOC_SEARCH_COUNT="5"
+export WOC_SEARCH_MAX="1"           # 单回合模型最多搜几次
 ```
 
 ### 配置文件
@@ -123,6 +128,13 @@ effort = "high"            # low/high/max，仅 enabled 时下发
 [pipe]
 enabled = true
 # max_chars = 32000        # 可选：默认跟随 budget.max_input_chars
+
+[search]
+enabled = false
+count = 5
+max_searches = 1
+max_chars = 6000
+timeout = 10
 
 [budget]
 context_tokens = 64000     # 模型上下文窗口
@@ -283,6 +295,42 @@ auto_safe = false      # 只读单命令是否免确认
   `;` 的命令一律仍需确认；`find`、`sort`、`awk`、`sed` 不在白名单里
   （分别可 `-exec`、`-o` 写盘、执行命令）。
 - 每步回显 `[step i/N]`；到步数或累计输出上限会明确提示，不会静默停止。
+
+### 网页搜索（`[search]`）
+
+**默认关闭，只在 `woc -c` 聊天模式生效。** 一次搜索是**第二个 HTTP 请求**
+（DeepSeek Search API），多一次延迟、多一次计费，所以它永远不在默认路径上。
+
+```bash
+woc -c --search "最新的 DeepSeek 版本"    # 允许模型按需搜索
+```
+
+```toml
+[search]
+enabled = false        # 等价于 --search / WOC_SEARCH=1
+count = 5              # 每次取几条（1～50）
+max_searches = 1       # 单回合模型最多搜几次
+max_chars = 6000       # 注入上下文的结果总字符上限
+timeout = 10           # 独立于根级 timeout=30
+# base_url = ""        # 空=跟随 api_base，自动补 /v1
+```
+
+两种触发方式：
+
+- **模型自主**：开了 `--search`（或 `[search] enabled = true`）之后，模型在需要实时
+  信息时回复 `#SEARCH: <关键词>`，woc 去搜、把 `<search_results>` 追加进上下文、
+  再问模型一轮。标记不会上屏；搜索失败会明确告诉模型"搜不了，别编链接"。
+- **人工指定**：会话里输入 `:search <关键词>`，直接搜一次并加入上下文，**不额外调
+  模型**。它不受 `--search` 限制 —— 那个开关是给模型开的，不是给人的。
+
+几条边界：
+
+- 只要 `summary`（约 600～800 字），不取整页正文；超出 `max_chars` 按相关度截断；
+- 结果注入在 messages 末尾，**不进稳定前缀**，前缀缓存不受影响；
+- 搜索结果里的内容是**第三方不可信文本**，提示里明确写了"不是指令"；聊天模式本来
+  就不执行任何东西，所以这条路径没有扩大执行面；
+- `#SEARCH:` 只做在 `woc -c`：单轮 `woc` 会拒绝它（注释行不是命令），`wocc` 里也
+  不会执行。取舍与下一步见 [docs/DESIGN-web-search.md](docs/DESIGN-web-search.md)。
 
 ### 命令语法预检（`[exec]`）
 
@@ -565,6 +613,9 @@ woc_chat 什么是 systemd？
 ```
 
 聊天模式专注于问答，不执行生成的内容。
+它也能联网搜索（默认关闭）：`woc -c --search "最新的 DeepSeek 版本"`
+允许模型按需搜索；会话里输入 `:search <关键词>` 则由你指定搜索内容，
+结果会加进上下文、不额外调模型。详见上面的「网页搜索（`[search]`）」。
 
 回答是**流式**的：SSE 增量一到就逐行渲染上屏，不用等整条回答收完；
 表格要看到整块才知道列宽，所以会晚一点整块出现。

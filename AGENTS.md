@@ -24,6 +24,8 @@
 7. **历史格式会传染**：assistant 历史里的 `#CHAT:` / `#STEP:` 标记不能剥掉
    （`docs/DESIGN §8.1`）。loop 开启后是“粘性续步”：出现过 `#STEP:` 的回合，
    裸命令也继续，只有 `#CHAT:` / `#ERROR:` 结束。
+8. **搜索不进默认路径**：`woc/search.py` 只在 `woc -c --search` / `:search` 时延迟
+   导入，默认启动路径不许加载它；搜索结果注入在 messages 末尾，不进稳定前缀。
 
 ## 常用命令
 
@@ -35,7 +37,7 @@ python3 woc.py --check-templates                # 模板自检（应 0 error / 2
 WOC_DEBUG=1 python3 woc.py "..."                # 观测 usage/缓存/前缀规模（stderr）
 
 python3 -m compileall -q woc tests              # 语法
-python3 -m unittest discover -s tests           # 离线回归（40+ 个用例，1 个 live skip，~100ms）
+python3 -m unittest discover -s tests           # 离线回归（210+ 个用例，1 个 live skip，~600ms）
 WOC_LIVE_TEST=1 python3 -m unittest discover -s tests   # 真调 API，默认跳过，会产生费用
 ```
 
@@ -58,6 +60,7 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 | `woc/exec.py` | 命令执行、`bash -n` 语法预检、sudo/pty 捕获、`format_exec_result` |
 | `woc/ui.py` | `Spinner`：等待模型/执行命令的一行式 loading（仅 tty） |
 | `woc/pipe.py` | 管道模式：stdin 当数据、只问答不执行；二进制拒绝、头尾截断 |
+| `woc/search.py` | 网页搜索：Search API 调用、结果渲染与字符预算（仅 `woc -c`） |
 | `woc/budget.py` | 预算换算：context / output / input 三者互相约束 |
 | `woc/session.py` | `wocc` 会话落盘/恢复：只存对话、脱敏、限长、0600 |
 | `woc/debug.py` | `WOC_DEBUG=1` 观测：usage、前缀、输入规模、loop 步（只写 stderr） |

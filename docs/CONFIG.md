@@ -83,6 +83,29 @@
 | `enabled` | `true` | `WOC_PIPE` | 关掉后，非终端输入直接拒绝（不再进入管道模式） |
 | `max_chars` | 跟随 `[budget] max_input_chars` | `WOC_PIPE_MAX_CHARS` | 单次送入的字符上限；仍会被上下文预算夹住 |
 
+## `[search]`（仅 `woc -c`）
+
+网页搜索（DeepSeek Search API）。一次搜索就是一次额外 HTTP 请求与一次计费，所以默认关闭。
+
+| 键 | 默认 | 环境变量 | 说明 |
+|---|---|---|---|
+| `enabled` | `false` | `WOC_SEARCH` | 允许模型用 `#SEARCH:` 自行搜索；等价 `--search` |
+| `base_url` | 空 | `WOC_SEARCH_BASE_URL` | 搜索接口的 API 根地址；空=跟随根级 `api_base`，自动补 `/v1` |
+| `count` | `5` | `WOC_SEARCH_COUNT` | 每次返回条数，1～50（接口默认 10，这里取小一点省 token） |
+| `max_searches` | `1` | `WOC_SEARCH_MAX` | 单回合模型最多搜几次；用尽后模型再要搜会被拒绝并提示 |
+| `max_chars` | `6000` | `WOC_SEARCH_MAX_CHARS` | 注入上下文的结果总字符上限；仍被 `[budget]` 夹住 |
+| `timeout` | `10` | `WOC_SEARCH_TIMEOUT` | 单次搜索超时（秒），与根级 `timeout` 独立 |
+
+`enabled` 只控制**模型**能不能自己搜；人工在会话里输入的 `:search <关键词>` 不受它
+限制 —— 那是显式动作，一次搜索一次计费。
+
+端点推导：搜索接口固定在 `/v1/tools/search`，而 `api_base` 可能写成
+`https://api.deepseek.com`，也可能写成 `https://api.deepseek.com/v1`。两种都会先归一成
+根地址再拼，不会出现 `/v1/v1/tools/search`。
+
+只取结果里的 `summary`（不取整页正文），并按 `rerank_score` 在本地排序；
+结果注入在 messages 末尾，不进稳定前缀，所以前缀缓存不受影响。
+
 ## `[budget]`
 
 三个数字互相约束，避免出现"输入上限比模型窗口还大"。
@@ -206,6 +229,14 @@ effort = "high"
 [pipe]
 enabled = true
 # max_chars = 32000      # 可选：默认跟随 budget.max_input_chars
+
+[search]
+enabled = false
+count = 5
+max_searches = 1
+max_chars = 6000
+timeout = 10
+# base_url = ""        # 可选：空=跟随根级 api_base
 
 [budget]
 context_tokens = 64000
