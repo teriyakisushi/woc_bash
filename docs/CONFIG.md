@@ -6,6 +6,9 @@
 配置文件是 TOML 的一个**很小子集**：只支持 `key = value`、`[section]` 和 `#` 注释，
 不支持数组、多行字符串、嵌套表 —— 项目零依赖，没有引入 TOML 解析器。
 
+`compile.py` 安装时会把下面这份完整模板写进 `config.toml`，并且**只补缺失项**：
+已有的键和值不会被覆盖。所以升级安装器既不会丢改动，新加的配置项也能自动落位。
+
 ## 优先级
 
 ```
@@ -89,15 +92,18 @@
 
 | 键 | 默认 | 环境变量 | 说明 |
 |---|---|---|---|
-| `enabled` | `false` | `WOC_SEARCH` | 允许模型用 `#SEARCH:` 自行搜索；等价 `--search` |
+| `enabled` | `true` | `WOC_SEARCH` | 允许模型用 `#SEARCH:` 自行搜索；`--no-search` 可只关本次会话 |
 | `base_url` | 空 | `WOC_SEARCH_BASE_URL` | 搜索接口的 API 根地址；空=跟随根级 `api_base`，自动补 `/v1` |
 | `count` | `5` | `WOC_SEARCH_COUNT` | 每次返回条数，1～50（接口默认 10，这里取小一点省 token） |
 | `max_searches` | `1` | `WOC_SEARCH_MAX` | 单回合模型最多搜几次；用尽后模型再要搜会被拒绝并提示 |
 | `max_chars` | `6000` | `WOC_SEARCH_MAX_CHARS` | 注入上下文的结果总字符上限；仍被 `[budget]` 夹住 |
 | `timeout` | `10` | `WOC_SEARCH_TIMEOUT` | 单次搜索超时（秒），与根级 `timeout` 独立 |
 
-`enabled` 只控制**模型**能不能自己搜；人工在会话里输入的 `:search <关键词>` 不受它
-限制 —— 那是显式动作，一次搜索一次计费。
+`enabled` 只控制**模型**能不能自己搜（默认开）；人工在 `woc -c` / `wocc` 里输入的
+`:search <关键词>` 不受它限制 —— 那是显式动作，一次搜索一次计费。
+
+命中列表默认不打印，`WOC_DEBUG=1` 时才输出标题、URL、条数与耗时；搜索失败会打印
+一行提示，并把"搜不了"作为上下文交给模型。
 
 端点推导：搜索接口固定在 `/v1/tools/search`，而 `api_base` 可能写成
 `https://api.deepseek.com`，也可能写成 `https://api.deepseek.com/v1`。两种都会先归一成
@@ -231,7 +237,7 @@ enabled = true
 # max_chars = 32000      # 可选：默认跟随 budget.max_input_chars
 
 [search]
-enabled = false
+enabled = true
 count = 5
 max_searches = 1
 max_chars = 6000

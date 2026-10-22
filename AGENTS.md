@@ -24,8 +24,9 @@
 7. **历史格式会传染**：assistant 历史里的 `#CHAT:` / `#STEP:` 标记不能剥掉
    （`docs/DESIGN §8.1`）。loop 开启后是“粘性续步”：出现过 `#STEP:` 的回合，
    裸命令也继续，只有 `#CHAT:` / `#ERROR:` 结束。
-8. **搜索不进默认路径**：`woc/search.py` 只在 `woc -c --search` / `:search` 时延迟
-   导入，默认启动路径不许加载它；搜索结果注入在 messages 末尾，不进稳定前缀。
+8. **搜索不进默认路径**：`woc/search.py` 只在真正搜索时延迟导入（`woc -c` 的
+   `#SEARCH:` / `:search`），默认启动路径不许加载它；搜索结果注入在 messages
+   末尾，不进稳定前缀；命中列表只在 `WOC_DEBUG=1` 时打印。
 
 ## 常用命令
 
@@ -74,7 +75,8 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 - 日志前缀统一走 `[prefix].alias`，**不要硬编码 `[woc]`**。
 - 改安全逻辑（`woc/gate.py` 的 `is_dangerous` / `is_root_shell` / `risk_tier`）必须同步
   `tests/test_gate.py` 的 `GateTest`。
-- 新增配置项放在 `woc/config.py` 对应小节，并支持环境变量覆盖。
+- 新增配置项放在 `woc/config.py` 对应小节，并支持环境变量覆盖；同时更新
+  `compile.py` 的 `CONFIG_TEMPLATE`，安装器靠它把新键补进老用户的 config.toml。
 - 不要为了少按一次回车放宽 `risk_tier` 的白名单。
 
 ## 提交约定

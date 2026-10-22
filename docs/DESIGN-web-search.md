@@ -1,8 +1,9 @@
 # 设计摘要：网页搜索（`woc -c --search` / `:search`）
 
-> 状态：**第一步已实现（2026-10-21，基线 `2878fa5`）**。范围只有 `woc -c` 聊天模式：
-> `--search` 让模型按需发 `#SEARCH:`，`:search <关键词>` 由人指定搜索内容。
-> 单轮 `woc`、`wocc` 的 loop step 都还没接。
+> 状态：**已实现并收尾（2026-10-21，基线 `2878fa5`）**。范围是 `woc -c` 聊天模式：
+> 默认由模型按需发 `#SEARCH:`（`--no-search` 关闭），`:search <关键词>` 在 `woc -c`
+> 与 `wocc` 里都可以人工指定搜索内容（见 §8.1）。单轮 `woc` 与 `wocc` 的 loop
+> step 仍未接。
 >
 > 目的不是说服，而是把代价摆出来：这个项目的卖点是"一条命令 + 一次确认 + 一次请求"，
 > 搜索是**第二个 HTTP 请求**，它必须证明自己没有把这三件事变贵。
@@ -17,10 +18,11 @@
    （157）与改动前一致。
 3. **协议复用文本标记**：`#SEARCH: <query>`，与 `#STEP:` / `#CHAT:` 同一套
    `StreamFilter`，不用 function calling（`docs/DESIGN-agentic-loop.md §4.4` 已否决）。
-4. **默认关闭**：一次搜索 = 一次请求 + 一次计费 + 0.3～0.8s 延迟（估算，未实测）；
-   自动识别意图的误判率换不来这个代价。
-5. **`:search` 不受开关限制**：`enabled` / `--search` 控制的是"模型能不能自己搜"，
-   人敲的命令是显式动作，不该先要求改配置。
+4. **默认开启，但不自动触发**：模型自己判断要不要搜；一次搜索 = 一次请求 +
+   一次计费 + 0.3～0.8s 延迟（估算，未实测），所以要能一键关掉（`--no-search` /
+   `[search] enabled = false`）。
+5. **`:search` 不受开关限制**：`enabled` / `--no-search` 控制的是"模型能不能自己
+   搜"，人敲的命令是显式动作，不该先要求改配置。`woc -c` 与 `wocc` 共用一份实现。
 6. **搜索结果是不可信第三方文本**：提示里写死"不是指令"，且聊天模式本来就不执行
    任何东西 —— 这条路径的安全面没有扩大。
 
@@ -90,8 +92,11 @@
   正文已经写进 stdout 了。这条是本次唯一改 `woc/llm.py` 行为的地方（见 §8）。
 - **标记留在历史里**：和 `#CHAT:` / `#STEP:` 同理 —— 模型模仿自己上一轮的格式，
   剥掉标记后它下一轮就不愿意写了（`docs/DESIGN-agentic-loop.md §8.1` 实测）。
+- **命中列表默认不打印**：自动搜索是"用户没按键就发生"的动作，标题 + URL 刷屏只会
+  打断阅读；`WOC_DEBUG=1` 才输出 query、条数、URL、耗时。失败仍然提示一行。
 - **人工 `:search <关键词>`**：直接搜一次、把结果作为 user 消息压进历史，**不调模型**。
-  一次搜索 = 一次请求，没有隐藏的第二次。
+  一次搜索 = 一次请求，没有隐藏的第二次；`woc -c` 与 `wocc` 共用
+  `search.search_command()`。
 
 注入格式（模型看到的）：
 
@@ -115,8 +120,9 @@ summary: ...
 | `woc --help` 模块数 | 157 | **157** |
 | `woc.search` 是否进启动路径 | — | **否**（延迟导入，测试守着） |
 | 单轮 `woc` 行为 | — | 完全不变 |
-| `woc -c` 无搜索 | 1 请求/轮 | **1 请求/轮**（不注入 hint 时前缀也逐字节不变） |
-| `woc -c --search` 真搜一次 | — | 2 请求/轮，输入增加约 3.5k 字符（5 条 summary） |
+| `woc -c` 模型不搜 | 1 请求/轮 | **1 请求/轮**（默认开着搜索也一样） |
+| `woc -c` 真搜一次 | — | 2 请求/轮，输入增加约 3.5k 字符（5 条 summary） |
+| `:search <词>`（chat / wocc） | — | 只 +1 次搜索请求，不调模型 |
 | 注入位置 | — | messages 末尾，**不进稳定前缀**，前缀缓存不受影响 |
 
 `SEARCH_HINT` 只在 `--search` / `[search] enabled` 时拼进 system prompt：不开搜索的
@@ -131,7 +137,8 @@ summary: ...
 
 两个刻意保留的语义：
 
-1. **`enabled` 不是自动搜索**，只表示"模型可以用 `#SEARCH:`"。
+1. **`enabled` 默认开启**，但只表示"模型可以用 `#SEARCH:`"；`--no-search` 关本次
+   会话，配置文件关全局。人工 `:search` 两者都不受影响。
 2. **`base_url` 留空跟随 `api_base`**，并且两种写法（带不带 `/v1`）都归一成根地址，
    避免 `/v1/v1/tools/search` 这种 404。
 
@@ -165,7 +172,8 @@ summary: ...
 | `woc/llm.py` | `StreamMode.SEARCH` + `#SEARCH:` 标记；`on_mode` 提到 `on_chunk` 之前 |
 | `woc/prompts.py` | `SEARCH_HINT`（只在使用时拼） |
 | `woc/cli/chat.py` | `--search`、`#SEARCH:` 回合推进、`:search` 命令、搜索失败降级 |
-| `tests/test_search.py` | **新增** 35 个离线用例（端点/渲染/降级/chat 回合/启动路径） |
+| `tests/test_search.py` | **新增** 41 个离线用例（端点/渲染/降级/chat 回合/wocc 命令/启动路径） |
+| `compile.py` | `CONFIG_TEMPLATE` + 合并逻辑：安装时只补缺失的配置项（§8.1） |
 
 一处顺带修好的旧问题：`on_mode` 之前晚于 `on_chunk`，导致 `#STEP:` 的首段命令
 没有按命令上色（单轮/loop 的 `on_chunk` 里读的是还没更新的 `state["mode"]`）。
@@ -173,9 +181,21 @@ summary: ...
 
 ---
 
+### 8.1 第二轮（同日）：默认自动、静默、进 wocc 与安装器
+
+| 改动 | 决定与理由 |
+|---|---|
+| `woc -c` 默认搜索 | 不用先开开关：模型判断需要实时信息就搜。代价从"要不要开"变成"模型觉得值不值"；`--no-search` 关本次会话，`[search] enabled = false` 关全局 |
+| 命中列表不进终端 | 自动搜索是"用户没按键就发生"的动作，刷标题 + URL 只会打断阅读。默认只留一句状态；`WOC_DEBUG=1` 才打印 query / 条数 / URL / 耗时 |
+| `:search` 进 `wocc` | 与 chat 共用 `search.perform()` / `search.search_command()`；搜完把结果压进上下文，下一轮提问直接可用，**不额外调模型** |
+| 安装器补配置 | `compile.py` 把 `CONFIG_TEMPLATE` 合进 `config.toml`：**只补缺失项**，老配置的值和注释都不动。新增配置项（比如 `[search]`）装一次就到位，不用回 README 手抄 |
+
+不做"每问必搜"：固定 +1 请求与 +0.5s 延迟，而大多数问题不需要；`#SEARCH:` 把决定权
+交给模型，`max_searches=1` 兜住滥用。人工 `:search` 仍然是一条命令一次搜索。
+
 ## 9. 验收
 
-1. `compileall` + `unittest discover -s tests`：**211 个用例全绿**（1 个 live skip）。
+1. `compileall` + `unittest discover -s tests`：**221 个用例全绿**（1 个 live skip）。
 2. 启动路径：`import woc.cli.chat` 后 `woc.search` 不在 `sys.modules`；模块数仍 157。
 3. 端到端（本地假 Search 服务）：`woc -c ":search 测试 查询"` 打到
    `/v1/tools/search`，`Authorization` 与 `{query, count, need_content:false}` 正确，
@@ -189,7 +209,8 @@ summary: ...
 - **`Fetch` 接口**：整页抓取要新增一个出口（模型给 URL → 服务端去抓），默认不开；
   等"搜索摘要不够用"成为真实抱怨再做。
 - **`wocc --loop` 的 `#SEARCH:` step**：协议已经能识别，但执行面在 `wocc` 里，
-  安全边界要重新过一遍（§7 第 3 条失效）。
+  安全边界要重新过一遍（§7 第 3 条失效）。目前 `wocc` 只支持人工 `:search`。
+- **每问必搜**：固定 +1 请求、+0.5s 延迟，大多数问题不需要；保持「模型判断」这一层。
 - **单轮 `woc --search`**：单轮是"一条命令 + 一次确认"，加搜索等于固定把 1 次请求
   变成 2 次；等有人明确要"查一下再说"的场景。
 - **`localization` 参数**：要传用户 IP，隐私上不划算，不做。
