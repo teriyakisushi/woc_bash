@@ -56,6 +56,18 @@ DEBUG_DEFAULTS = {"enabled": False}
 # [session] 段：wocc 会话落盘，供 --last-session 恢复。
 SESSION_DEFAULTS = {"persist": True, "max_messages": 40, "max_chars": 60000}
 
+# [search] 段：网页搜索（DeepSeek Search API，见 docs/DESIGN-web-search.md）。
+# enabled 只控制“模型能不能自己用 #SEARCH:”；人工输入的 :search 是显式动作，
+# 不受它限制。base_url 留空时跟随根级 api_base（自动补 /v1）。
+SEARCH_DEFAULTS = {
+    "enabled": False,
+    "base_url": "",
+    "count": 5,
+    "max_searches": 1,
+    "max_chars": 6000,
+    "timeout": 10,
+}
+
 
 def _to_bool(value):
     return str(value).strip().lower() not in ("", "0", "false", "no", "off")
@@ -223,6 +235,47 @@ def pipe_max_chars(cfg, reserved_chars=0):
     return min(value, limit)
 
 
+def search_enabled(cfg):
+    """模型是否可以用 `#SEARCH:` 自行搜索（[search] enabled / --search）。
+
+    只控制模型的自主动作：用户输入的 `:search` 是显式请求，不受这里限制。
+    """
+    return bool((cfg.get("search") or {}).get(
+        "enabled", SEARCH_DEFAULTS["enabled"]))
+
+
+def search_settings(cfg):
+    """[search] 段的规范化取值。坏值回落到默认，不让一次手滑毁掉整次会话。"""
+    raw = cfg.get("search") or {}
+
+    def positive(key):
+        try:
+            value = int(raw.get(key, SEARCH_DEFAULTS[key]))
+        except (TypeError, ValueError):
+            return SEARCH_DEFAULTS[key]
+        return value if value > 0 else SEARCH_DEFAULTS[key]
+
+    return {
+        "enabled": bool(raw.get("enabled", SEARCH_DEFAULTS["enabled"])),
+        "base_url": str(raw.get("base_url") or "").strip(),
+        "count": max(1, min(positive("count"), 50)),
+        "max_searches": positive("max_searches"),
+        "max_chars": positive("max_chars"),
+        "timeout": positive("timeout"),
+    }
+
+
+def search_max_chars(cfg, reserved_chars=0):
+    """单次搜索注入上下文的最大字符数。
+
+    和 [pipe] max_chars 同理：显式配置优先，但仍要被上下文预算夹住 —— 否则
+    把 search.max_chars 调到 10 万，请求会直接撞模型窗口。
+    """
+    settings = search_settings(cfg)
+    return min(settings["max_chars"],
+               budget.input_char_limit(cfg, reserved_chars))
+
+
 def load_config(path=None):
     """读取配置；环境变量优先于配置文件。
 
@@ -233,7 +286,7 @@ def load_config(path=None):
         wocc_prefix = "qwee"
         woc_chat_prefix = "qwe_chat"
 
-    以及 [sudo] / [context] / [exec] / [ui] / [pipe] / [budget]
+    以及 [sudo] / [context] / [exec] / [ui] / [pipe] / [search] / [budget]
     / [thinking] / [debug] 段：
         [sudo]
         capture_output = false
@@ -255,6 +308,14 @@ def load_config(path=None):
         [pipe]
         enabled = true
         max_chars = 32000        # 可选：默认跟随 budget.max_input_chars
+
+        [search]                # 网页搜索；enabled 只控制模型能否自行 #SEARCH:
+        enabled = false
+        count = 5               # 1～50
+        max_searches = 1        # 单回合模型最多搜几次
+        max_chars = 6000        # 注入上下文的结果总字符上限
+        timeout = 10            # 独立于根级 timeout
+        base_url = ""           # 空=跟随 api_base，自动补 /v1
 
         [budget]
         context_tokens = 64000
@@ -337,6 +398,19 @@ def load_config(path=None):
             "max_chars": _env_optional_positive_int(
                 "WOC_PIPE_MAX_CHARS", notes),
         },
+        "search": {
+            "enabled": _env_bool("WOC_SEARCH", SEARCH_DEFAULTS["enabled"]),
+            "base_url": os.environ.get("WOC_SEARCH_BASE_URL",
+                                       SEARCH_DEFAULTS["base_url"]),
+            "count": _env_positive_int(
+                "WOC_SEARCH_COUNT", SEARCH_DEFAULTS["count"], notes),
+            "max_searches": _env_positive_int(
+                "WOC_SEARCH_MAX", SEARCH_DEFAULTS["max_searches"], notes),
+            "max_chars": _env_positive_int(
+                "WOC_SEARCH_MAX_CHARS", SEARCH_DEFAULTS["max_chars"], notes),
+            "timeout": _env_positive_int(
+                "WOC_SEARCH_TIMEOUT", SEARCH_DEFAULTS["timeout"], notes),
+        },
     }
 
     path = path or default_config_path()
@@ -418,6 +492,32 @@ def load_config(path=None):
                         cfg["budget"]["max_input_chars"] = _file_positive_int(
                             value, budget.MAX_INPUT_CHARS, notes,
                             "budget.max_input_chars")
+                    continue
+                if section == "search":
+                    if key == "enabled" and "WOC_SEARCH" not in os.environ:
+                        cfg["search"]["enabled"] = _to_bool(value)
+                    elif (key == "base_url"
+                          and "WOC_SEARCH_BASE_URL" not in os.environ):
+                        cfg["search"]["base_url"] = value
+                    elif key == "count" and "WOC_SEARCH_COUNT" not in os.environ:
+                        cfg["search"]["count"] = _file_positive_int(
+                            value, SEARCH_DEFAULTS["count"], notes,
+                            "search.count")
+                    elif (key == "max_searches"
+                          and "WOC_SEARCH_MAX" not in os.environ):
+                        cfg["search"]["max_searches"] = _file_positive_int(
+                            value, SEARCH_DEFAULTS["max_searches"], notes,
+                            "search.max_searches")
+                    elif (key == "max_chars"
+                          and "WOC_SEARCH_MAX_CHARS" not in os.environ):
+                        cfg["search"]["max_chars"] = _file_positive_int(
+                            value, SEARCH_DEFAULTS["max_chars"], notes,
+                            "search.max_chars")
+                    elif (key == "timeout"
+                          and "WOC_SEARCH_TIMEOUT" not in os.environ):
+                        cfg["search"]["timeout"] = _file_positive_int(
+                            value, SEARCH_DEFAULTS["timeout"], notes,
+                            "search.timeout")
                     continue
                 if section == "session":
                     if key == "persist" and "WOC_SESSION_PERSIST" not in os.environ:

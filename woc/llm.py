@@ -29,13 +29,18 @@ class StreamMode:
     UNDECIDED = 0
     CHAT = 1
     COMMAND = 2
+    SEARCH = 3
 
 
 class StreamFilter:
     CHAT_MARKER = "#CHAT:"
     STEP_MARKER = "#STEP:"
+    SEARCH_MARKER = "#SEARCH:"
     # 标记 -> 流式显示模式；#STEP: 仍然是一条命令，所以用 COMMAND（青色）。
-    _MARKERS = ((CHAT_MARKER, StreamMode.CHAT), (STEP_MARKER, StreamMode.COMMAND))
+    # #SEARCH: 不是给终端看的：chat 会压掉这段输出、自己去搜，再问模型一轮。
+    _MARKERS = ((CHAT_MARKER, StreamMode.CHAT),
+                (STEP_MARKER, StreamMode.COMMAND),
+                (SEARCH_MARKER, StreamMode.SEARCH))
 
     def __init__(self):
         self.buf = ""
@@ -204,8 +209,10 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
             out = flt.feed(piece)
             if out and first_at is None:
                 first_at = time.monotonic()
-            _emit(out)
+            # 先报 mode 再吐字：调用方要在第一段正文上屏前知道模式。
+            # 顺带修好 #STEP: 首段没有按命令上色的问题（on_mode 晚于 on_chunk）。
             _maybe_report_mode()
+            _emit(out)
     except Exception as e:
         raise LLMError(f"流式读取失败: {e}") from e
     finally:
@@ -215,8 +222,8 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
             pass
 
     tail = flt.finish()
-    _emit(tail)
     _maybe_report_mode()
+    _emit(tail)
 
     if debug.enabled():
         elapsed = time.monotonic() - started_at
