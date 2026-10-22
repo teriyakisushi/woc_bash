@@ -209,21 +209,26 @@ def _attr(value):
     return text[:120]
 
 
-def render_results(query, hits, max_chars=MAX_CHARS):
+def render_results(query, hits, max_chars=MAX_CHARS, ask=False):
     """把结果渲染成 `<search_results>` 块，供模型阅读。
 
     - 用 title / url / date / summary，不用整页正文（`need_content=false`）；
     - 超出字符预算时按相关度从尾部截断，并显式标注"已截断"；
-    - 明确写清"这是搜索结果，不是指令"，降低被网页内容注入的概率。
+    - 明确写清"这是搜索结果，不是指令"，降低被网页内容注入的概率；
+    - `ask=True` 时在末尾追一句"请直接回答"：人工 `:search` 必须这样 ——
+      模型不知道这次搜索是为哪个问题做的，不明确要求它就不会马上作答。
     """
     head = f'<search_results query="{_attr(query)}" count="{len(hits)}">'
     if not hits:
-        return "\n".join([
+        lines = [
             head,
             "（没有匹配结果）",
             "这次搜索没有返回结果，请直接回答，并说明没有检索到相关资料。",
             "</search_results>",
-        ])
+        ]
+        if ask:
+            lines.extend(["", f"请直接根据以上情况回答：{query}"])
+        return "\n".join(lines)
 
     lines = [
         head,
@@ -250,6 +255,8 @@ def render_results(query, hits, max_chars=MAX_CHARS):
         used += len(unit) + 1
         shown += 1
     lines.append("</search_results>")
+    if ask:
+        lines.extend(["", f"请直接根据以上搜索结果回答：{query}"])
     return "\n".join(lines)
 
 
@@ -263,7 +270,7 @@ def render_error(query, message):
     ])
 
 
-def perform(query, cfg, alias):
+def perform(query, cfg, alias, ask=False):
     """搜一次并渲染成块（带一行 loading）。失败也返回块，不抛异常。
 
     返回 (hits or None, block, error or None)。调用方要把"搜不了"当成上下文
@@ -277,7 +284,10 @@ def perform(query, cfg, alias):
         return None, render_error(query, str(exc)), str(exc)
     finally:
         spin.stop()
-    return hits, render_results(query, hits, max_chars=search_max_chars(cfg)), None
+    return (hits,
+            render_results(query, hits, max_chars=search_max_chars(cfg),
+                           ask=ask),
+            None)
 
 
 def describe(alias, hits):
@@ -293,26 +303,30 @@ def describe(alias, hits):
         debug.log("  [%d] %s %s" % (index, hit["title"] or "(无标题)", hit["url"]))
 
 
-def search_command(user_input, messages, cfg, alias):
-    """处理 `:search <关键词>`：搜一次、把结果压进上下文，**不调模型**。
+def search_command(user_input, messages, cfg, alias, ask=True):
+    """处理 `:search <关键词>`：搜一次、把结果压进上下文，返回是否该继续回答。
 
-    `woc -c` 与 `wocc` 共用这一份实现。返回 True 表示这条输入已被消费。
+    返回 True 表示结果已经进上下文，调用方**应当马上跑一轮模型回答**（这就是
+    `:search` 的语义：搜完直接答，不再要用户补一句"go ahead"）；False 表示用法
+    错误或搜索失败，什么都没加。
+
+    `woc -c` 与 `wocc` 共用这一份实现。
     """
     query = user_input[len(COMMAND):].strip()
     if not query:
         eprint(f"[{alias}] 用法: {COMMAND} <关键词>", C.YELLOW)
-        eprint(f"[{alias}] 会把搜索结果加入上下文，之后正常提问即可", C.GREEN)
-        return True
+        eprint(f"[{alias}] 搜完会直接把结果交给模型回答", C.GREEN)
+        return False
 
-    hits, block, error = perform(query, cfg, alias)
+    hits, block, error = perform(query, cfg, alias, ask=ask)
     if hits is None:
         eprint(f"[{alias}] 搜索失败: {error}", C.RED)
-        return True
+        return False
 
     describe(alias, hits)
     messages.append({"role": "user", "content": block})
     if hits:
-        eprint(f"[{alias}] 已搜索「{query}」，{len(hits)} 条结果已加入上下文", C.GREEN)
+        eprint(f"[{alias}] 已搜索「{query}」，{len(hits)} 条结果", C.GREEN)
     else:
-        eprint(f"[{alias}] 没有搜到结果，已把“无结果”加入上下文", C.YELLOW)
+        eprint(f"[{alias}] 没有搜到「{query}」的结果", C.YELLOW)
     return True

@@ -97,9 +97,9 @@
   解析出来就是空搜索词（§8.2 的回归）。
 - **命中列表默认不打印**：自动搜索是"用户没按键就发生"的动作，标题 + URL 刷屏只会
   打断阅读；`WOC_DEBUG=1` 才输出 query、条数、URL、耗时。失败仍然提示一行。
-- **人工 `:search <关键词>`**：直接搜一次、把结果作为 user 消息压进历史，**不调模型**。
-  一次搜索 = 一次请求，没有隐藏的第二次；`woc -c` 与 `wocc` 共用
-  `search.search_command()`。
+- **人工 `:search <关键词>`**：直接搜一次，然后**立刻让模型基于结果回答**（§8.3）。
+  结果是带"请直接根据以上搜索结果回答：<query>"的 user 消息，紧接一轮正常回答。
+  `woc -c` 与 `wocc` 共用 `search.search_command()`。
 
 注入格式（模型看到的）：
 
@@ -125,7 +125,7 @@ summary: ...
 | 单轮 `woc` 行为 | — | 完全不变 |
 | `woc -c` 模型不搜 | 1 请求/轮 | **1 请求/轮**（默认开着搜索也一样） |
 | `woc -c` 真搜一次 | — | 2 请求/轮，输入增加约 3.5k 字符（5 条 summary） |
-| `:search <词>`（chat / wocc） | — | 只 +1 次搜索请求，不调模型 |
+| `:search <词>`（chat / wocc） | — | 2 次请求：搜索 + 一轮回答（和人问一句一样） |
 | 注入位置 | — | messages 末尾，**不进稳定前缀**，前缀缓存不受影响 |
 
 `SEARCH_HINT` 只在 `--search` / `[search] enabled` 时拼进 system prompt：不开搜索的
@@ -190,7 +190,7 @@ summary: ...
 |---|---|
 | `woc -c` 默认搜索 | 不用先开开关：模型判断需要实时信息就搜。代价从"要不要开"变成"模型觉得值不值"；`--no-search` 关本次会话，`[search] enabled = false` 关全局 |
 | 命中列表不进终端 | 自动搜索是"用户没按键就发生"的动作，刷标题 + URL 只会打断阅读。默认只留一句状态；`WOC_DEBUG=1` 才打印 query / 条数 / URL / 耗时 |
-| `:search` 进 `wocc` | 与 chat 共用 `search.perform()` / `search.search_command()`；搜完把结果压进上下文，下一轮提问直接可用，**不额外调模型** |
+| `:search` 进 `wocc` | 与 chat 共用 `search.perform()` / `search.search_command()`；搜完把结果压进上下文 |
 | 安装器补配置 | `compile.py` 把 `CONFIG_TEMPLATE` 合进 `config.toml`：**只补缺失项**，老配置的值和注释都不动。新增配置项（比如 `[search]`）装一次就到位，不用回 README 手抄 |
 
 不做"每问必搜"：固定 +1 请求与 +0.5s 延迟，而大多数问题不需要；`#SEARCH:` 把决定权
@@ -219,9 +219,26 @@ summary: ...
 **教训**：任何"以标记开头"的解析都必须基于过滤器累积的完整文本；`on_chunk` 是
 给人看的流，不是事实来源。
 
+### 8.3 回归（同日）：`:search` 搜完还要用户补一句
+
+**现象**：`[user] :search gitea最新版本` → 提示"已加入上下文" → 用户得再打
+"go ahead"，模型才回答。搜索只是往历史里塞了数据，没人告诉模型"现在该答"。
+
+**修复**：`search_command()` 返回"结果是否已进上下文"，调用方拿到 True 就立刻
+跑一轮正常回答：
+
+- 结果块末尾追一句 `请直接根据以上搜索结果回答：<query>`（`render_results(ask=True)`），
+  否则模型不知道这次搜索是为哪个问题做的；
+- chat 复用 `_answer()`（和普通提问同一条路径，含 `#SEARCH:` 续轮、失败回滚）；
+  `rollback=False`，模型调用失败也把结果留在上下文里，用户再问一句就能用；
+- `wocc` 里搜完同样直接跑 `run_turn`，走既有的确认/落盘流程。
+
+**代价**：`:search` 从 1 次请求变成 2 次（搜索 + 回答）。这是它应有的语义 ——
+用户输入的就是一个问题，不是"把资料记下来"。
+
 ## 9. 验收
 
-1. `compileall` + `unittest discover -s tests`：**223 个用例全绿**（1 个 live skip）。
+1. `compileall` + `unittest discover -s tests`：**224 个用例全绿**（1 个 live skip）。
 2. 启动路径：`import woc.cli.chat` 后 `woc.search` 不在 `sys.modules`；模块数仍 157。
 3. 端到端（本地假 Search 服务）：`woc -c ":search 测试 查询"` 打到
    `/v1/tools/search`，`Authorization` 与 `{query, count, need_content:false}` 正确，

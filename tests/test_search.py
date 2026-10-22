@@ -455,13 +455,18 @@ class ChatSearchTest(unittest.TestCase):
         self.assertIn("搜索失败", llm.calls[1][-1]["content"])
         self.assertIn("据我所知", out)
 
-    def test_search_command_injects_context_without_extra_llm_call(self):
+    def test_search_command_answers_immediately(self):
+        # :search 的语义是"搜完直接答"，不是把结果塞进历史等用户再说一句。
         out, err, llm, found = self.run_chat(
-            [":search", "DeepSeek 发布"], [])
+            [":search", "DeepSeek 发布"],
+            [(StreamMode.CHAT, "现在有 V4。\n")])
         self.assertEqual(found, ["DeepSeek 发布"])
-        self.assertEqual(llm.calls, [], ":search 不该额外调模型")
-        self.assertEqual(out, "")
+        self.assertEqual(len(llm.calls), 1, ":search 之后应当马上问一次模型")
         self.assertIn("已搜索", err)
+        self.assertIn("现在有 V4。", out)
+        # 模型收到的是搜索结果 + 一句明确的"请直接回答"。
+        self.assertIn("<search_results", llm.calls[0][-1]["content"])
+        self.assertIn("请直接根据", llm.calls[0][-1]["content"])
 
     def test_search_command_without_query_prints_usage(self):
         _out, err, llm, found = self.run_chat([":search"], [])
@@ -469,12 +474,20 @@ class ChatSearchTest(unittest.TestCase):
         self.assertEqual(llm.calls, [])
         self.assertIn("用法", err)
 
+    def test_search_failure_does_not_ask_the_model(self):
+        _out, err, llm, found = self.run_chat(
+            [":search", "任意"], [], error="HTTP 402: 余额不足")
+        self.assertEqual(found, ["任意"])
+        self.assertEqual(llm.calls, [], "搜都失败了，没有可回答的上下文")
+        self.assertIn("搜索失败", err)
+
     def test_search_command_works_without_search_flags(self):
         # 人工 :search 是显式动作，不受 --no-search / [search] enabled 限制。
         cfg = make_cfg(search={"enabled": False})
-        _out, err, _llm, found = self.run_chat(
-            [":search", "任意"], [], cfg=cfg)
+        _out, err, llm, found = self.run_chat(
+            [":search", "任意"], [(StreamMode.CHAT, "好的\n")], cfg=cfg)
         self.assertEqual(found, ["任意"])
+        self.assertEqual(len(llm.calls), 1)
         self.assertIn("已搜索", err)
 
 
@@ -496,6 +509,8 @@ class SearchCommandSharedTest(unittest.TestCase):
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["role"], "user")
         self.assertIn("<search_results", messages[0]["content"])
+        # ask=True：块末带一句"请直接回答"，否则模型拿到结果也不知道该做什么。
+        self.assertIn("请直接根据", messages[0]["content"])
         self.assertIn("已搜索", err.getvalue())
 
     def test_failure_does_not_touch_messages(self):
@@ -508,7 +523,8 @@ class SearchCommandSharedTest(unittest.TestCase):
         err = io.StringIO()
         with mock.patch.object(search_mod, "search", boom), \
                 redirect_stderr(err):
-            search_mod.search_command(":search x", messages, cfg, "woc")
+            handled = search_mod.search_command(":search x", messages, cfg, "woc")
+        self.assertFalse(handled, "搜索失败时调用方不该继续问模型")
         self.assertEqual(messages, [])
         self.assertIn("搜索失败", err.getvalue())
 
@@ -519,6 +535,8 @@ class WoccSearchCommandTest(unittest.TestCase):
     def test_wocc_dispatches_search_command(self):
         from woc.cli import multi
 
+        # wocc 里搜完同样要直接跑一回合；这里把 run_turn 换成记录器，避免真调模型。
+        rounds = []
         cfg = make_cfg()
         cfg["session"] = {"persist": False, "max_messages": 40,
                           "max_chars": 60000}
@@ -534,12 +552,20 @@ class WoccSearchCommandTest(unittest.TestCase):
             return [search_mod._normalize(raw_hit(1))]
 
         err = io.StringIO()
-        with mock.patch.object(sys, "stdin", stdin),                 mock.patch.object(multi, "load_config", return_value=cfg),                 mock.patch.object(multi, "interactive_input",
-                                  lambda *a, **k: next(feeds)),                 mock.patch.object(multi, "messages_prefix",
-                                  lambda **kwargs: messages),                 mock.patch.object(search_mod, "search", fake_search),                 redirect_stderr(err), redirect_stdout(io.StringIO()):
+        with mock.patch.object(sys, "stdin", stdin), \
+                mock.patch.object(multi, "load_config", return_value=cfg), \
+                mock.patch.object(multi, "interactive_input",
+                                  lambda *a, **k: next(feeds)), \
+                mock.patch.object(multi, "messages_prefix",
+                                  lambda **kwargs: messages), \
+                mock.patch.object(search_mod, "search", fake_search), \
+                mock.patch.object(multi, "run_turn",
+                                  lambda *a, **k: rounds.append(True)), \
+                redirect_stderr(err), redirect_stdout(io.StringIO()):
             multi.wocc_main([])
 
         self.assertEqual(found, ["关键词"])
+        self.assertEqual(len(rounds), 1, ":search 之后应当马上跑一回合")
         self.assertIn("已搜索", err.getvalue())
         self.assertTrue(any("<search_results" in str(item.get("content"))
                             for item in messages))

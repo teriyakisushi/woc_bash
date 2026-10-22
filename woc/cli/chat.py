@@ -28,7 +28,7 @@ def _stream_once(messages, cfg, alias, colors, can_search, status):
     - 完整文本 = `call_llm_messages_stream()` 的返回值（即 StreamFilter.acc），
       **以标记开头**。标记本身会被过滤器吃掉、不会进 on_chunk —— 真实 SSE
       经常把 `#SEARCH:` 单独送一块，这时候拼接结果里根本没有标记，拿它解析
-      搜索词就会得到空串（线上"搜索词为空"就是这么来的）。
+      搜索词就会得到空串。
 
     `#SEARCH:` 永远不当作正文本上屏：能不能搜由调用方决定，标记本身对用户
     没有意义。on_mode 必须先于 on_chunk 到达，否则标记后的第一段正文已经
@@ -94,6 +94,72 @@ def _split_search(text):
     return query, "\n".join(lines[consumed:]).strip()
 
 
+def _answer(messages, cfg, alias, colors, search_on, settings, rollback=True):
+    """跑一轮回答；模型用 `#SEARCH:` 时最多续 `max_searches` 轮。
+
+    messages 必须已经以 user 消息结尾。`rollback` 为真时，失败的回合会把最后
+    那条 user 消息弹掉（保持历史干净）；`:search` 走的是 rollback=False ——
+    已经花掉一次搜索，失败也把结果留在上下文里，用户再问一句就能用。
+    """
+    turns = 0
+    while True:
+        can_search = search_on and turns < settings["max_searches"]
+        status = {"started": False}
+        try:
+            answer, mode, full = _stream_once(
+                messages, cfg, alias, colors, can_search, status)
+        except LLMError as exc:
+            if status["started"]:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            if rollback:
+                messages.pop()
+            eprint(f"[{alias}] LLM 调用失败: {exc}", C.RED)
+            return False
+
+        if mode == StreamMode.SEARCH and can_search:
+            from ..search import describe, perform   # 延迟导入：默认路径不加载
+            query, _tail = _split_search(full)
+            hits, block, error = perform(query, cfg, alias)
+            describe(alias, hits)      # 只有 WOC_DEBUG=1 时才真的打印
+            if hits is None:
+                eprint(f"[{alias}] 搜索失败，已让模型改用自有知识: {error}", C.RED)
+            # 成功/空结果都不刷屏：命中列表只在 WOC_DEBUG=1 时打印
+            # （见 woc/search.py 的 describe）。用户看到的应该只有答案。
+            messages.append({
+                "role": "assistant",
+                "content": StreamFilter.SEARCH_MARKER + " " + query,
+            })
+            messages.append({"role": "user", "content": block})
+            turns += 1
+            continue
+
+        if mode == StreamMode.SEARCH:
+            # 不能搜（关掉了 / 次数用尽）：标记已经压掉，别把 query 当答案回显。
+            query, _tail = _split_search(full)
+            if rollback:
+                messages.pop()
+            if search_on:
+                eprint(f"[{alias}] 本回合搜索已达上限 "
+                       f"{settings['max_searches']} 次（模型想搜: {query}）",
+                       C.YELLOW)
+            else:
+                eprint(f"[{alias}] 模型想搜索（{query}），但本会话关掉了自主搜索；"
+                       f"去掉 --no-search，或直接用 {SEARCH_COMMAND} <关键词>",
+                       C.YELLOW)
+            return False
+
+        if not answer.strip():
+            if rollback:
+                messages.pop()
+            eprint(f"[{alias}] LLM 未返回内容", C.RED)
+            return False
+
+        print()
+        messages.append({"role": "assistant", "content": answer})
+        return True
+
+
 def woc_chat_main(argv=None, name=None, via_woc=False):
     argv = argv or []
     cfg = load_config()
@@ -118,7 +184,7 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
         print("进入支持 Markdown 渲染的多轮聊天。输入 :q / exit / quit 退出。")
         print("  --search          允许模型按需搜索网页（默认已开启）")
         print("  --no-search       本次会话关闭模型自主搜索；:search 仍然可用")
-        print(f"  {SEARCH_COMMAND} <关键词>   人工指定搜索内容，搜完加入上下文再提问")
+        print(f"  {SEARCH_COMMAND} <关键词>   搜一次网页，直接让模型根据结果回答")
         raise SystemExit(0)
 
     one_shot = bool(args) and not sys.stdin.isatty()
@@ -171,66 +237,16 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
         words = question.split(maxsplit=1)
         if words and words[0] == SEARCH_COMMAND:
             from ..search import search_command     # 延迟导入：默认路径不加载
-            search_command(question, messages, cfg, alias)
+            # 搜到结果就直接让模型回答，不再要用户补一句"go ahead"。
+            if search_command(question, messages, cfg, alias):
+                _answer(messages, cfg, alias, colors, search_on, settings,
+                        rollback=False)
             if one_shot:
                 return
             continue
 
         messages.append({"role": "user", "content": question})
-        turns = 0
-        # 一个回合里模型可能要搜一次再答：搜索是"多一轮请求"，不是新交互概念。
-        while True:
-            can_search = search_on and turns < settings["max_searches"]
-            status = {"started": False}
-            try:
-                answer, mode, full = _stream_once(
-                    messages, cfg, alias, colors, can_search, status)
-            except LLMError as exc:
-                if status["started"]:
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                messages.pop()
-                eprint(f"[{alias}] LLM 调用失败: {exc}", C.RED)
-                break
-
-            if mode == StreamMode.SEARCH and can_search:
-                from ..search import describe, perform   # 延迟导入：默认路径不加载
-                query, _tail = _split_search(full)
-                hits, block, error = perform(query, cfg, alias)
-                describe(alias, hits)      # 只有 WOC_DEBUG=1 时才真的打印
-                if hits is None:
-                    eprint(f"[{alias}] 搜索失败，已让模型改用自有知识: {error}", C.RED)
-                # 成功/空结果都不刷屏：命中列表只在 WOC_DEBUG=1 时打印
-                # （见 woc/search.py 的 describe）。用户看到的应该只有答案。
-                messages.append({
-                    "role": "assistant",
-                    "content": StreamFilter.SEARCH_MARKER + " " + query,
-                })
-                messages.append({"role": "user", "content": block})
-                turns += 1
-                continue
-
-            if mode == StreamMode.SEARCH:
-                # 不能搜（关掉了 / 次数用尽）：标记已经压掉，别把 query 当答案回显。
-                query, _tail = _split_search(full)
-                messages.pop()
-                if search_on:
-                    eprint(f"[{alias}] 本回合搜索已达上限 "
-                           f"{settings['max_searches']} 次（模型想搜: {query}）",
-                           C.YELLOW)
-                else:
-                    eprint(f"[{alias}] 模型想搜索（{query}），但本会话关掉了自主搜索；"
-                           f"去掉 --no-search，或直接用 {SEARCH_COMMAND} <关键词>",
-                           C.YELLOW)
-                break
-
-            if not answer.strip():
-                messages.pop()
-                eprint(f"[{alias}] LLM 未返回内容", C.RED)
-                break
-            print()
-            messages.append({"role": "assistant", "content": answer})
-            break
+        _answer(messages, cfg, alias, colors, search_on, settings)
         if one_shot:
             return
 
