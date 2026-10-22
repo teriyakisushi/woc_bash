@@ -6,7 +6,7 @@
 1. 端点固定在 `/v1/tools/search`，而 `api_base` 可能已经带了 `/v1`。
    所以先归一化成"根地址"再拼路径，不能直接 `api_base + path`。
 2. 搜索结果是**第三方不可信文本**。这里只负责取回和排版，绝不执行其中任何
-   内容；调用方（chat）把它当资料塞进上下文，命令仍然走原有的确认流程。
+   内容；调用方把结果当资料塞进上下文，命令仍然走原有的确认流程。
 3. 只有 HTTP 200 且结果非空才计费，所以"没搜到"和"搜不了"要分开表达：
    前者是正常结果，后者要明确告诉模型改用自有知识，别让它编链接。
 """
@@ -17,9 +17,15 @@ import urllib.error
 import urllib.request
 
 from . import debug
+from .colors import C, eprint
+from .config import search_max_chars, spinner as spinner_enabled
+from .ui import Spinner
 
 # 搜索接口的固定路径（相对 API 根地址）。
 SEARCH_PATH = "/v1/tools/search"
+
+# 人工指定搜索内容的会话内命令（chat 与 wocc 共用）。
+COMMAND = ":search"
 
 # 接口限制：query 1～128 个 Unicode 字符，count 1～50。
 QUERY_MAX_CHARS = 128
@@ -255,3 +261,58 @@ def render_error(query, message):
         "当前无法联网检索。请直接回答，不要编造链接、日期或声称搜到了内容。",
         "</search_results>",
     ])
+
+
+def perform(query, cfg, alias):
+    """搜一次并渲染成块（带一行 loading）。失败也返回块，不抛异常。
+
+    返回 (hits or None, block, error or None)。调用方要把"搜不了"当成上下文
+    交给模型，而不是让整个回合崩掉。
+    """
+    spin = Spinner(f"[{alias}] Searching", enabled=spinner_enabled(cfg))
+    spin.start()
+    try:
+        hits = search(query, cfg)
+    except SearchError as exc:
+        return None, render_error(query, str(exc)), str(exc)
+    finally:
+        spin.stop()
+    return hits, render_results(query, hits, max_chars=search_max_chars(cfg)), None
+
+
+def describe(alias, hits):
+    """命中列表只在 WOC_DEBUG=1 时打印。
+
+    搜索是"用户没按任何键就发生了"的动作：默认静默，回答里用 [1] [2] 标号
+    就够了。要排查搜索质量时再打开 debug，看 query / 条数 / URL。
+    """
+    if not debug.enabled() or not hits:
+        return
+    debug.log(f"search: hits={len(hits)}")
+    for index, hit in enumerate(hits, 1):
+        debug.log("  [%d] %s %s" % (index, hit["title"] or "(无标题)", hit["url"]))
+
+
+def search_command(user_input, messages, cfg, alias):
+    """处理 `:search <关键词>`：搜一次、把结果压进上下文，**不调模型**。
+
+    `woc -c` 与 `wocc` 共用这一份实现。返回 True 表示这条输入已被消费。
+    """
+    query = user_input[len(COMMAND):].strip()
+    if not query:
+        eprint(f"[{alias}] 用法: {COMMAND} <关键词>", C.YELLOW)
+        eprint(f"[{alias}] 会把搜索结果加入上下文，之后正常提问即可", C.GREEN)
+        return True
+
+    hits, block, error = perform(query, cfg, alias)
+    if hits is None:
+        eprint(f"[{alias}] 搜索失败: {error}", C.RED)
+        return True
+
+    describe(alias, hits)
+    messages.append({"role": "user", "content": block})
+    if hits:
+        eprint(f"[{alias}] 已搜索「{query}」，{len(hits)} 条结果已加入上下文", C.GREEN)
+    else:
+        eprint(f"[{alias}] 没有搜到结果，已把“无结果”加入上下文", C.YELLOW)
+    return True

@@ -18,6 +18,7 @@ HELP_LINES = (
     (":steps", "本回合的步骤审计"),
     (":explain", "解释上一条命令与输出（只发一次请求，不进历史）"),
     (":again", "重跑上一条命令（仍需确认）"),
+    (":search <关键词>", "搜索网页，把结果加入上下文（不调模型）"),
     (":help", "显示这段帮助"),
 )
 
@@ -91,6 +92,7 @@ def wocc_main(argv):
         print("  --resume NAME   恢复指定会话（名字来自 --sessions）")
         print("会话内命令: :q 退出 · :more / v 展开输出 · :last 看上一条命令")
         print("            :steps 本回合的步骤审计 · :explain 解释上一条命令与输出")
+        print("            :search <关键词> 搜索网页并把结果加入上下文（不调模型）")
         sys.exit(0)
 
     if not sys.stdin.isatty():
@@ -127,7 +129,8 @@ def wocc_main(argv):
             eprint(f"[{alias}] 没有可恢复的会话"
                    "（没保存过，或格式不兼容）", C.YELLOW)
 
-    eprint(f"[{alias}] 已进入多轮会话，输入 :q 退出", C.GREEN, C.BOLD)
+    eprint(f"[{alias}] 已进入多轮会话，输入 :q 退出（:help 看会话内命令）",
+           C.GREEN, C.BOLD)
     if loop_enabled:
         eprint(f"[{alias}] loop 已开启：最多 {max_steps} 步，"
                f"只读命令免确认: {'是' if auto_safe else '否'}", C.GREEN)
@@ -156,6 +159,13 @@ def wocc_main(argv):
             break
         if user_input in (":help", ":h", "?"):
             show_help(alias)
+            continue
+        # 人工指定搜索内容：搜一次并把结果压进上下文，不额外调模型。
+        # 和 `woc -c` 共用 woc/search.py 里的同一份实现。
+        words = user_input.split(maxsplit=1)
+        if words and words[0] == ":search":
+            from ..search import search_command      # 延迟导入：默认路径不加载
+            search_command(user_input, messages, cfg, alias)
             continue
         if user_input == ":again":
             rerun_last(messages, alias=alias, cfg=cfg, capture=capture)

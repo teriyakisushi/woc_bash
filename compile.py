@@ -38,6 +38,72 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 # 命令名会直接变成可执行文件名，只允许安全字符
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
+# 安装时写进 config.toml 的完整模板。只补缺失项：已有的键和值一律不动，
+# 所以老用户升级安装器不会丢配置，新加的配置项也能自动落位。
+# 逐项说明见 docs/CONFIG.md；环境变量优先于这个文件。
+CONFIG_TEMPLATE = """\
+# woc 配置（由 compile.py 生成：只补缺失项，已有配置不会被覆盖）
+# 逐项说明见 docs/CONFIG.md；环境变量优先于这个文件。
+
+api_base = "https://api.deepseek.com"
+api_key  = ""
+model    = "deepseek-flash"
+timeout  = 30
+
+[prefix]
+alias = "woc"
+woc_prefix = "woc"
+wocc_prefix = "wocc"
+woc_chat_prefix = "woc_chat"
+
+[sudo]
+capture_output = false
+
+[context]
+ls_on_start = false
+
+[loop]
+enabled = false
+max_steps = 5
+total_chars = 24000
+auto_safe = false
+
+[exec]
+syntax_check = true
+
+[ui]
+spinner = true
+fold_lines = 25
+
+[thinking]
+enabled = false
+effort = "high"
+
+[pipe]
+enabled = true
+
+[search]
+enabled = true
+count = 5
+max_searches = 1
+max_chars = 6000
+timeout = 10
+
+[budget]
+context_tokens = 64000
+max_output_tokens = 4096
+max_input_chars = 32000
+
+[debug]
+enabled = false
+
+[session]
+persist = true
+max_messages = 40
+max_chars = 60000
+"""
+
+
 # shell 配置块标记，方便幂等追加 / 卸载时删除
 MARK_BEGIN = "# >>> woc initialize >>>"
 MARK_END = "# <<< woc initialize <<<"
@@ -162,6 +228,108 @@ def _drop_section(lines: list, section: str) -> list:
         if not skipping:
             kept.append(line)
     return kept
+
+
+def _template_sections():
+    """把模板拆成 [(段名, [(key, 原文行)])]；根级段的名字是空字符串。"""
+    blocks = [("", [])]
+    for raw in CONFIG_TEMPLATE.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            blocks.append((line[1:-1].strip().lower(), []))
+        elif "=" in line and not line.startswith("#"):
+            key = line.split("=", 1)[0].strip()
+            if key:
+                blocks[-1][1].append((key, raw))
+    return blocks
+
+
+def _config_present(lines):
+    """文件里已经有哪些段/键：{段名: {key}}，根级段名是空字符串。"""
+    present = {"": set()}
+    section = ""
+    for raw in lines:
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().lower()
+            present.setdefault(section, set())
+        elif "=" in line and not line.startswith("#"):
+            key = line.split("=", 1)[0].strip()
+            if key:
+                present.setdefault(section, set()).add(key)
+    return present
+
+
+def merge_config_text(text):
+    """把模板里缺失的键补进配置文本，返回（新文本，新增键数）。
+
+    缺失的键补在所属段的末尾；整个段都不存在时追加到文件尾部。已有的值和
+    注释一律不动 —— 安装器升级不该改用户手写的配置。
+    """
+    lines = text.splitlines()
+    present = _config_present(lines)
+    blocks = _template_sections()
+    missing = {}
+    for name, entries in blocks:
+        absent = [(key, line) for key, line in entries
+                  if key not in present.get(name, set())]
+        if absent:
+            missing[name] = absent
+
+    out = []
+    added = 0
+    section = ""
+
+    def flush():
+        nonlocal added
+        count = 0
+        for _key, line in missing.pop(section, []):
+            out.append(line)
+            added += 1
+            count += 1
+        return count
+
+    for raw in lines:
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            # 补进去的键要跟下一段之间留一个空行，否则粘在 [section] 上很难看。
+            if flush() and out and out[-1].strip():
+                out.append("")
+            section = line[1:-1].strip().lower()
+        out.append(raw)
+    flush()
+
+    for name, entries in blocks:
+        if name == "" or name in present:
+            continue
+        out.append("")
+        out.append(f"[{name}]")
+        for _key, line in entries:
+            out.append(line)
+            added += 1
+
+    body = "\n".join(out).rstrip("\n")
+    return (body + "\n" if body else ""), added
+
+
+def merge_config_template(path=None):
+    """把缺失的配置项补进 config.toml；返回新增键数（-1 表示新建了文件）。
+
+    这是 `[search]` / `[thinking]` 这类新配置项落到老用户机器上的唯一路径：
+    装一次就有，不用回 README 手抄。
+    """
+    path = Path(path) if path else CONFIG_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+        path.chmod(0o600)
+        return -1
+    original = path.read_text(encoding="utf-8")
+    merged, added = merge_config_text(original)
+    if merged != original:
+        path.write_text(merged, encoding="utf-8")
+        path.chmod(0o600)
+    return added
 
 
 def write_prefix_config(names: dict) -> None:
@@ -502,6 +670,15 @@ def do_install(args) -> None:
     # API Key / config.toml（含"已存在不覆盖"逻辑）
     maybe_write_config(args)
     write_prefix_config(names)
+
+    # 配置模板：只补缺失项，已有配置不动（新增配置项靠这里落地）
+    added = merge_config_template()
+    if added < 0:
+        log(f"已写入配置模板: {CONFIG_FILE}（权限 600）")
+    elif added:
+        log(f"已补齐配置模板: {CONFIG_FILE}（新增 {added} 项，已有配置未改动）")
+    else:
+        log(f"配置模板已是最新: {CONFIG_FILE}")
 
     # 验证
     verify(target_dir, rc_files, names)

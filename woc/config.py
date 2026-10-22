@@ -57,10 +57,11 @@ DEBUG_DEFAULTS = {"enabled": False}
 SESSION_DEFAULTS = {"persist": True, "max_messages": 40, "max_chars": 60000}
 
 # [search] 段：网页搜索（DeepSeek Search API，见 docs/DESIGN-web-search.md）。
-# enabled 只控制“模型能不能自己用 #SEARCH:”；人工输入的 :search 是显式动作，
-# 不受它限制。base_url 留空时跟随根级 api_base（自动补 /v1）。
+# enabled 默认开启：聊天模式里由模型自己判断要不要搜（一次搜索 = 一次额外请求）。
+# 它只管模型的自主动作，人工输入的 :search 不受限制。
+# base_url 留空时跟随根级 api_base（自动补 /v1）。
 SEARCH_DEFAULTS = {
-    "enabled": False,
+    "enabled": True,
     "base_url": "",
     "count": 5,
     "max_searches": 1,
@@ -310,7 +311,7 @@ def load_config(path=None):
         max_chars = 32000        # 可选：默认跟随 budget.max_input_chars
 
         [search]                # 网页搜索；enabled 只控制模型能否自行 #SEARCH:
-        enabled = false
+        enabled = true
         count = 5               # 1～50
         max_searches = 1        # 单回合模型最多搜几次
         max_chars = 6000        # 注入上下文的结果总字符上限

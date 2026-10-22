@@ -2,8 +2,8 @@ import os
 import sys
 
 from ..colors import C, cerr, eprint, interactive_input
-from ..config import (load_config, prefix, search_enabled, search_max_chars,
-                      search_settings, spinner as spinner_enabled)
+from ..config import (load_config, prefix, search_enabled, search_settings,
+                      spinner as spinner_enabled)
 from ..llm import LLMError, StreamFilter, StreamMode, call_llm_messages_stream
 from ..markdown import MarkdownStream
 from ..prompts import SEARCH_HINT
@@ -79,82 +79,31 @@ def _split_search(text):
     return first.strip(), tail.strip()
 
 
-def _search_block(query, cfg, alias):
-    """执行一次搜索，返回（结果列表 or None，注入上下文的块，错误信息 or None）。
-
-    延迟导入 `..search`：`woc/__main__.py` 会在**所有**命令的启动路径上 import
-    这个模块，顶层 import 等于给 `woc --help` 白加一个模块（见 DESIGN §2）。
-    """
-    from ..search import SearchError, render_error, render_results, search
-
-    spin = Spinner(f"[{alias}] Searching", enabled=spinner_enabled(cfg))
-    spin.start()
-    try:
-        hits = search(query, cfg)
-    except SearchError as exc:
-        return None, render_error(query, str(exc)), str(exc)
-    finally:
-        spin.stop()
-
-    block = render_results(query, hits, max_chars=search_max_chars(cfg))
-    return hits, block, None
-
-
-def _print_hits(alias, hits, limit=5):
-    """把结果清单打到 stderr：回答走 stdout，来源和状态走 stderr。"""
-    for index, hit in enumerate(hits[:limit], 1):
-        eprint(f"[{alias}] [{index}] {hit['title'] or '(无标题)'}", C.CYAN)
-        if hit["url"]:
-            eprint(f"       {hit['url']}", C.GREEN)
-    if len(hits) > limit:
-        eprint(f"[{alias}] 其余 {len(hits) - limit} 条只进上下文", C.GREEN)
-
-
-def _handle_search_command(question, cfg, alias, messages):
-    """`:search <关键词>`：手动搜一次，把结果加进上下文，不额外调模型。"""
-    query = question[len(SEARCH_COMMAND):].strip()
-    if not query:
-        eprint(f"[{alias}] 用法: {SEARCH_COMMAND} <关键词>", C.YELLOW)
-        eprint(f"[{alias}] 会把搜索结果加入上下文，之后正常提问即可", C.GREEN)
-        return
-
-    hits, block, error = _search_block(query, cfg, alias)
-    if hits is None:
-        eprint(f"[{alias}] 搜索失败: {error}", C.RED)
-        return
-    if hits:
-        eprint(f"[{alias}] 搜索: {query}", C.CYAN, C.BOLD)
-        _print_hits(alias, hits)
-    else:
-        eprint(f"[{alias}] 没有搜到结果", C.YELLOW)
-    messages.append({"role": "user", "content": block})
-    eprint(f"[{alias}] 已加入上下文（{len(hits)} 条），继续提问即可", C.GREEN)
-
-
 def woc_chat_main(argv=None, name=None, via_woc=False):
     argv = argv or []
     cfg = load_config()
     name = name or prefix(cfg, "woc_chat_prefix")
     alias = prefix(cfg, "alias")
 
-    # --search 只认开头：它是开关，不是问题的一部分。
+    # 搜索默认开启（模型自己判断要不要搜），只认开头的开关：
+    # --no-search 关掉本会话的自主搜索；--search 是显式打开（保留给脚本/习惯用法）。
     args = list(argv)
-    flag_search = False
-    while args and args[0] == "--search":
-        flag_search = True
-        args.pop(0)
-    search_on = flag_search or search_enabled(cfg)
+    flag_search = None
+    while args and args[0] in ("--search", "--no-search"):
+        flag_search = args.pop(0) == "--search"
+    search_on = flag_search if flag_search is not None else search_enabled(cfg)
     settings = search_settings(cfg)
 
     if args and args[0] in ("-h", "--help"):
         if via_woc:
-            print(f"用法: {name} -c [--search] [首轮问题]")
+            print(f"用法: {name} -c [--no-search] [首轮问题]")
         else:
-            print(f"用法: {name} [--search] [首轮问题]")
+            print(f"用法: {name} [--no-search] [首轮问题]")
             print(f"也可以由 {prefix(cfg, 'woc_prefix')} -c 启动。")
         print("进入支持 Markdown 渲染的多轮聊天。输入 :q / exit / quit 退出。")
-        print("  --search          允许模型在需要时自行搜索网页")
-        print(f"  {SEARCH_COMMAND} <关键词>   先搜索网页，把结果加入上下文再提问")
+        print("  --search          允许模型按需搜索网页（默认已开启）")
+        print("  --no-search       本次会话关闭模型自主搜索；:search 仍然可用")
+        print(f"  {SEARCH_COMMAND} <关键词>   人工指定搜索内容，搜完加入上下文再提问")
         raise SystemExit(0)
 
     one_shot = bool(args) and not sys.stdin.isatty()
@@ -176,10 +125,10 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
 
     eprint(f"[{alias}] 已进入聊天，当前目录: {cwd}", C.GREEN, C.BOLD)
     if search_on:
-        eprint(f"[{alias}] 模型可按需搜索网页；也可以用 {SEARCH_COMMAND} <关键词> 指定",
-               C.GREEN)
+        eprint(f"[{alias}] 需要时会自动搜索网页（--no-search 关闭；"
+               f"{SEARCH_COMMAND} <关键词> 可手动指定）", C.GREEN)
     else:
-        eprint(f"[{alias}] 用 {SEARCH_COMMAND} <关键词> 可以先搜网页（模型自主搜索未开）",
+        eprint(f"[{alias}] 模型自主搜索已关闭；{SEARCH_COMMAND} <关键词> 仍可手动搜索",
                C.GREEN)
     eprint(f"[{alias}] 输入 :q 退出", C.GREEN)
 
@@ -206,7 +155,8 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
         # 但 :searchfoo 不是（那是问题）。
         words = question.split(maxsplit=1)
         if words and words[0] == SEARCH_COMMAND:
-            _handle_search_command(question, cfg, alias, messages)
+            from ..search import search_command     # 延迟导入：默认路径不加载
+            search_command(question, messages, cfg, alias)
             if one_shot:
                 return
             continue
@@ -229,17 +179,14 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
                 break
 
             if mode == StreamMode.SEARCH and can_search:
+                from ..search import describe, perform   # 延迟导入：默认路径不加载
                 query, _tail = _split_search(answer)
-                hits, block, error = _search_block(query, cfg, alias)
+                hits, block, error = perform(query, cfg, alias)
+                describe(alias, hits)      # 只有 WOC_DEBUG=1 时才真的打印
                 if hits is None:
                     eprint(f"[{alias}] 搜索失败，已让模型改用自有知识: {error}", C.RED)
-                elif not hits:
-                    eprint(f"[{alias}] 没有搜到结果，已告知模型", C.YELLOW)
-                else:
-                    eprint(f"[{alias}] 搜索: {query}", C.CYAN, C.BOLD)
-                    _print_hits(alias, hits)
-                # 标记留在历史里：和 #CHAT: / #STEP: 同一个理由——模型会模仿
-                # 自己上一轮的格式，剥掉标记会让它下一轮越来越不愿意写。
+                # 成功/空结果都不刷屏：命中列表只在 WOC_DEBUG=1 时打印
+                # （见 woc/search.py 的 describe）。用户看到的应该只有答案。
                 messages.append({
                     "role": "assistant",
                     "content": StreamFilter.SEARCH_MARKER + " " + query,
@@ -249,7 +196,7 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
                 continue
 
             if mode == StreamMode.SEARCH:
-                # 不能搜（没开 / 次数用尽）：标记已经压掉，别把 query 当答案回显。
+                # 不能搜（关掉了 / 次数用尽）：标记已经压掉，别把 query 当答案回显。
                 query, _tail = _split_search(answer)
                 messages.pop()
                 if search_on:
@@ -257,8 +204,8 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
                            f"{settings['max_searches']} 次（模型想搜: {query}）",
                            C.YELLOW)
                 else:
-                    eprint(f"[{alias}] 模型想搜索（{query}），但搜索未开启；"
-                           f"加 --search 或直接用 {SEARCH_COMMAND} <关键词>",
+                    eprint(f"[{alias}] 模型想搜索（{query}），但本会话关掉了自主搜索；"
+                           f"去掉 --no-search，或直接用 {SEARCH_COMMAND} <关键词>",
                            C.YELLOW)
                 break
 

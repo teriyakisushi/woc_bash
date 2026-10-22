@@ -1,8 +1,9 @@
-"""网页搜索（`[search]` / `--search` / `:search`）的离线回归。
+"""网页搜索（`[search]` / `--no-search` / `:search`）的离线回归。
 
-真实 API 不在这里调：所有请求都打到假 urlopen 上。覆盖四件事——
+真实 API 不在这里调：所有请求都打到假 urlopen 上。覆盖五件事——
 端点推导（api_base 带不带 /v1）、结果渲染与截断、错误降级、
-以及 chat 里 `#SEARCH:` 回合怎么推进（多一轮请求、标记不上屏、历史保留）。
+chat 里 `#SEARCH:` 回合怎么推进（默认开启、多一轮请求、标记与命中列表都不刷屏）、
+以及 chat 与 wocc 共用的 `:search` 实现。
 """
 
 import io
@@ -34,7 +35,7 @@ BASE_CFG = {
     "prefix": {"alias": "woc", "woc_prefix": "woc", "wocc_prefix": "wocc",
                "woc_chat_prefix": "woc_chat"},
     "ui": {"spinner": False},
-    "search": {"enabled": False, "base_url": "", "count": 5,
+    "search": {"enabled": True, "base_url": "", "count": 5,
                "max_searches": 1, "max_chars": 6000, "timeout": 10},
 }
 
@@ -137,8 +138,7 @@ class SearchCallTest(unittest.TestCase):
         self.assertFalse(captured["body"]["need_content"])
         self.assertNotIn("ori_question", captured["body"])
         self.assertEqual(captured["timeout"], 10)
-        self.assertIn("Bearer test-key",
-                      json.dumps(captured["headers"]))
+        self.assertIn("Bearer test-key", json.dumps(captured["headers"]))
         # 按 rerank_score 从高到低，不需要额外请求。
         self.assertEqual([hit["title"] for hit in hits],
                          ["标题9", "标题2", "标题1"])
@@ -231,10 +231,16 @@ class ConfigTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             cfg = load_config(path="/nonexistent/config.toml")
         self.assertEqual(cfg["search"], {
-            "enabled": False, "base_url": "", "count": 5,
+            "enabled": True, "base_url": "", "count": 5,
             "max_searches": 1, "max_chars": 6000, "timeout": 10})
-        self.assertFalse(search_enabled(cfg))
+        # 默认开启：聊天模式里模型自己判断要不要搜。
+        self.assertTrue(search_enabled(cfg))
         self.assertEqual(search_settings(cfg)["count"], 5)
+
+    def test_env_can_turn_search_off(self):
+        with mock.patch.dict(os.environ, {"WOC_SEARCH": "0"}, clear=True):
+            cfg = load_config(path="/nonexistent/config.toml")
+        self.assertFalse(search_enabled(cfg))
 
     def test_env_overrides(self):
         env = {"WOC_SEARCH": "1", "WOC_SEARCH_COUNT": "8",
@@ -251,7 +257,7 @@ class ConfigTest(unittest.TestCase):
     def test_file_section(self):
         with tempfile.NamedTemporaryFile("w", suffix=".toml",
                                          delete=False) as handle:
-            handle.write("[search]\nenabled = true\ncount = 3\n"
+            handle.write("[search]\nenabled = false\ncount = 3\n"
                          "max_chars = 1234\ntimeout = 5\n")
             path = handle.name
         try:
@@ -259,7 +265,7 @@ class ConfigTest(unittest.TestCase):
                 cfg = load_config(path=path)
         finally:
             os.unlink(path)
-        self.assertTrue(cfg["search"]["enabled"])
+        self.assertFalse(cfg["search"]["enabled"])
         self.assertEqual(cfg["search"]["count"], 3)
         self.assertEqual(cfg["search"]["max_chars"], 1234)
         self.assertEqual(cfg["search"]["timeout"], 5)
@@ -332,9 +338,10 @@ class ChatSearchTest(unittest.TestCase):
             chat.woc_chat_main(argv)
         return out.getvalue(), err.getvalue(), llm, found
 
-    def test_model_initiated_search_costs_one_extra_round(self):
-        out, _err, llm, found = self.run_chat(
-            ["--search", "最新的 DeepSeek 版本"],
+    def test_search_is_on_by_default(self):
+        # 不加任何开关：模型要搜就搜，用户看到的只有答案。
+        out, err, llm, found = self.run_chat(
+            ["最新的 DeepSeek 版本"],
             [(StreamMode.SEARCH, "#SEARCH: DeepSeek 最新版本"),
              (StreamMode.CHAT, "现在有 V4。\n")])
         self.assertEqual(found, ["DeepSeek 最新版本"])
@@ -347,17 +354,35 @@ class ChatSearchTest(unittest.TestCase):
         self.assertIn("<search_results", second[-1]["content"])
         self.assertIn("https://example.com/1", second[-1]["content"])
 
-    def test_no_search_flag_means_no_search(self):
+    def test_hit_list_is_silent_by_default(self):
+        _out, err, _llm, _found = self.run_chat(
+            ["问题"],
+            [(StreamMode.SEARCH, "#SEARCH: 关键词"),
+             (StreamMode.CHAT, "答案\n")])
+        self.assertNotIn("标题1", err, "命中列表默认不打印")
+        self.assertNotIn("https://example.com/1", err)
+
+    def test_hit_list_prints_under_debug(self):
+        # debug.log 自己还会检查 _enabled，所以这里直接翻开关（等价 WOC_DEBUG=1）。
+        with mock.patch.object(search_mod.debug, "_enabled", True):
+            _out, err, _llm, _found = self.run_chat(
+                ["问题"],
+                [(StreamMode.SEARCH, "#SEARCH: 关键词"),
+                 (StreamMode.CHAT, "答案\n")])
+        self.assertIn("标题1", err)
+        self.assertIn("https://example.com/1", err)
+
+    def test_no_search_flag_disables_model_search(self):
         out, err, llm, found = self.run_chat(
-            ["问题"], [(StreamMode.SEARCH, "#SEARCH: 不该执行")])
+            ["--no-search", "问题"], [(StreamMode.SEARCH, "#SEARCH: 不该执行")])
         self.assertEqual(found, [])
         self.assertEqual(len(llm.calls), 1)
         self.assertNotIn("#SEARCH", out)
-        self.assertIn("搜索未开启", err)
+        self.assertIn("关掉了自主搜索", err)
 
     def test_max_searches_is_a_hard_stop(self):
         _out, err, llm, found = self.run_chat(
-            ["--search", "问题"],
+            ["问题"],
             [(StreamMode.SEARCH, "#SEARCH: 第一次"),
              (StreamMode.SEARCH, "#SEARCH: 第二次")],
             cfg=make_cfg(search={"max_searches": 1}))
@@ -367,7 +392,7 @@ class ChatSearchTest(unittest.TestCase):
 
     def test_search_failure_is_degraded_not_fatal(self):
         out, _err, llm, found = self.run_chat(
-            ["--search", "问题"],
+            ["问题"],
             [(StreamMode.SEARCH, "#SEARCH: 余额"),
              (StreamMode.CHAT, "据我所知……\n")],
             error="HTTP 402: 余额不足")
@@ -382,7 +407,7 @@ class ChatSearchTest(unittest.TestCase):
         self.assertEqual(found, ["DeepSeek 发布"])
         self.assertEqual(llm.calls, [], ":search 不该额外调模型")
         self.assertEqual(out, "")
-        self.assertIn("已加入上下文", err)
+        self.assertIn("已搜索", err)
 
     def test_search_command_without_query_prints_usage(self):
         _out, err, llm, found = self.run_chat([":search"], [])
@@ -390,11 +415,80 @@ class ChatSearchTest(unittest.TestCase):
         self.assertEqual(llm.calls, [])
         self.assertIn("用法", err)
 
-    def test_search_command_works_without_flag(self):
-        # 人工 :search 是显式动作，不受 [search] enabled / --search 限制。
-        _out, err, _llm, found = self.run_chat([":search", "任意"], [])
+    def test_search_command_works_without_search_flags(self):
+        # 人工 :search 是显式动作，不受 --no-search / [search] enabled 限制。
+        cfg = make_cfg(search={"enabled": False})
+        _out, err, _llm, found = self.run_chat(
+            [":search", "任意"], [], cfg=cfg)
         self.assertEqual(found, ["任意"])
-        self.assertIn("已加入上下文", err)
+        self.assertIn("已搜索", err)
+
+
+class SearchCommandSharedTest(unittest.TestCase):
+    """`:search` 的实现是 chat 与 wocc 共用的一份，这里直接测它。"""
+
+    def test_appends_block_and_reports(self):
+        cfg = make_cfg()
+        messages = []
+        err = io.StringIO()
+        with mock.patch.object(
+                search_mod, "search",
+                lambda q, c, ori_question=None: [
+                    search_mod._normalize(raw_hit(1))]), \
+                redirect_stderr(err):
+            handled = search_mod.search_command(
+                ":search DeepSeek", messages, cfg, "woc")
+        self.assertTrue(handled)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["role"], "user")
+        self.assertIn("<search_results", messages[0]["content"])
+        self.assertIn("已搜索", err.getvalue())
+
+    def test_failure_does_not_touch_messages(self):
+        cfg = make_cfg()
+        messages = []
+
+        def boom(*_args, **_kwargs):
+            raise search_mod.SearchError("HTTP 402: 余额不足", code=402)
+
+        err = io.StringIO()
+        with mock.patch.object(search_mod, "search", boom), \
+                redirect_stderr(err):
+            search_mod.search_command(":search x", messages, cfg, "woc")
+        self.assertEqual(messages, [])
+        self.assertIn("搜索失败", err.getvalue())
+
+
+class WoccSearchCommandTest(unittest.TestCase):
+    """`:search` 在 `wocc` 里也要能用（和 chat 共用同一份实现）。"""
+
+    def test_wocc_dispatches_search_command(self):
+        from woc.cli import multi
+
+        cfg = make_cfg()
+        cfg["session"] = {"persist": False, "max_messages": 40,
+                          "max_chars": 60000}
+        messages = []
+        feeds = iter([":search 关键词", ":q"])
+        stdin = mock.MagicMock()
+        stdin.isatty.return_value = True
+
+        found = []
+
+        def fake_search(query, _cfg, ori_question=None):
+            found.append(query)
+            return [search_mod._normalize(raw_hit(1))]
+
+        err = io.StringIO()
+        with mock.patch.object(sys, "stdin", stdin),                 mock.patch.object(multi, "load_config", return_value=cfg),                 mock.patch.object(multi, "interactive_input",
+                                  lambda *a, **k: next(feeds)),                 mock.patch.object(multi, "messages_prefix",
+                                  lambda **kwargs: messages),                 mock.patch.object(search_mod, "search", fake_search),                 redirect_stderr(err), redirect_stdout(io.StringIO()):
+            multi.wocc_main([])
+
+        self.assertEqual(found, ["关键词"])
+        self.assertIn("已搜索", err.getvalue())
+        self.assertTrue(any("<search_results" in str(item.get("content"))
+                            for item in messages))
 
 
 class LazyImportTest(unittest.TestCase):
