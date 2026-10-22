@@ -21,7 +21,14 @@ SEARCH_COMMAND = ":search"
 
 
 def _stream_once(messages, cfg, alias, colors, can_search, status):
-    """流式请求一轮并渲染，返回（完整文本，流式模式）。
+    """流式请求一轮并渲染，返回（上屏文本，流式模式，完整文本）。
+
+    两个文本不一样，别混用：
+    - 上屏文本 = on_chunk 收到的片段拼接，用于写历史/判断空回答；
+    - 完整文本 = `call_llm_messages_stream()` 的返回值（即 StreamFilter.acc），
+      **以标记开头**。标记本身会被过滤器吃掉、不会进 on_chunk —— 真实 SSE
+      经常把 `#SEARCH:` 单独送一块，这时候拼接结果里根本没有标记，拿它解析
+      搜索词就会得到空串（线上"搜索词为空"就是这么来的）。
 
     `#SEARCH:` 永远不当作正文本上屏：能不能搜由调用方决定，标记本身对用户
     没有意义。on_mode 必须先于 on_chunk 到达，否则标记后的第一段正文已经
@@ -56,27 +63,35 @@ def _stream_once(messages, cfg, alias, colors, can_search, status):
 
     spin.start()
     try:
-        call_llm_messages_stream(
+        raw = call_llm_messages_stream(
             cfg=cfg, messages=messages, on_chunk=on_chunk, on_mode=on_mode
         )
     finally:
         spin.stop()
 
     renderer.finish()
-    return strip_dsml("".join(chunks)), state["mode"]
+    return strip_dsml("".join(chunks)), state["mode"], strip_dsml(raw)
 
 
 def _split_search(text):
     """把 `#SEARCH: query` 拆成（搜索词，标记后面的正文）。
 
-    协议上标记只占第一行；模型偶尔会在后面补一句正文，这里留着，不静默丢。
+    搜索词取**第一个非空行**：模型偶尔会把 query 写到标记的下一行，那不该
+    变成空搜索词。后面的正文留着，不静默丢。
     """
     stripped = (text or "").strip()
     if not stripped.startswith(StreamFilter.SEARCH_MARKER):
         return "", text
     rest = stripped[len(StreamFilter.SEARCH_MARKER):]
-    first, _sep, tail = rest.partition("\n")
-    return first.strip(), tail.strip()
+    lines = [line.strip() for line in rest.splitlines()]
+    query = ""
+    consumed = 0
+    for index, line in enumerate(lines):
+        if line:
+            query = line
+            consumed = index + 1
+            break
+    return query, "\n".join(lines[consumed:]).strip()
 
 
 def woc_chat_main(argv=None, name=None, via_woc=False):
@@ -168,7 +183,7 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
             can_search = search_on and turns < settings["max_searches"]
             status = {"started": False}
             try:
-                answer, mode = _stream_once(
+                answer, mode, full = _stream_once(
                     messages, cfg, alias, colors, can_search, status)
             except LLMError as exc:
                 if status["started"]:
@@ -180,7 +195,7 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
 
             if mode == StreamMode.SEARCH and can_search:
                 from ..search import describe, perform   # 延迟导入：默认路径不加载
-                query, _tail = _split_search(answer)
+                query, _tail = _split_search(full)
                 hits, block, error = perform(query, cfg, alias)
                 describe(alias, hits)      # 只有 WOC_DEBUG=1 时才真的打印
                 if hits is None:
@@ -197,7 +212,7 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
 
             if mode == StreamMode.SEARCH:
                 # 不能搜（关掉了 / 次数用尽）：标记已经压掉，别把 query 当答案回显。
-                query, _tail = _split_search(answer)
+                query, _tail = _split_search(full)
                 messages.pop()
                 if search_on:
                     eprint(f"[{alias}] 本回合搜索已达上限 "

@@ -316,10 +316,42 @@ class FakeLLM:
         return text
 
 
+class ChunkedFakeLLM:
+    """按真实 SSE 的粒度喂数据：内部走一遍真正的 StreamFilter。
+
+    `on_chunk` 只会收到过滤器"放出来"的片段，标记本身不会出现 —— 这正是
+    `#SEARCH:` 单独成块时线上踩到的坑。
+    """
+
+    def __init__(self, replies):
+        # replies: [(mode, [chunk, ...]), ...]
+        self.replies = list(replies)
+        self.calls = []
+
+    def __call__(self, cfg, messages, on_chunk=None, on_mode=None):
+        self.calls.append([dict(item) for item in messages])
+        _mode, pieces = self.replies.pop(0)
+        flt = StreamFilter()
+        reported = None
+        for piece in pieces:
+            out = flt.feed(piece)
+            if flt.mode != StreamMode.UNDECIDED and flt.mode != reported:
+                reported = flt.mode
+                if on_mode:
+                    on_mode(flt.mode)
+            if out and on_chunk:
+                on_chunk(out)
+        tail = flt.finish()
+        if tail and on_chunk:
+            on_chunk(tail)
+        return flt.acc.strip()
+
+
 class ChatSearchTest(unittest.TestCase):
-    def run_chat(self, argv, replies, hits=None, cfg=None, error=None):
+    def run_chat(self, argv, replies, hits=None, cfg=None, error=None,
+                 llm=None):
         cfg = cfg or make_cfg()
-        llm = FakeLLM(replies)
+        llm = llm or FakeLLM(replies)
         found = []
 
         def fake_search(query, _cfg, ori_question=None):
@@ -353,6 +385,28 @@ class ChatSearchTest(unittest.TestCase):
         self.assertEqual(second[-2]["content"], "#SEARCH: DeepSeek 最新版本")
         self.assertIn("<search_results", second[-1]["content"])
         self.assertIn("https://example.com/1", second[-1]["content"])
+
+    def test_marker_arriving_alone_still_yields_the_query(self):
+        # 真实 SSE 常把 "#SEARCH:" 单独送一块：那时 on_chunk 里没有标记，
+        # 用它反推文本会得到空搜索词（线上 "搜索词为空" 的根因）。
+        llm = ChunkedFakeLLM([
+            (StreamMode.SEARCH,
+             ["#SEARCH:", " current version of genshin impact"]),
+            (StreamMode.CHAT, ["It is 6.0.\n"]),
+        ])
+        out, _err, _llm, found = self.run_chat(
+            ["--search", "current version of genshin impact"], [], llm=llm)
+        self.assertEqual(found, ["current version of genshin impact"])
+        self.assertIn("It is 6.0.", out)
+
+    def test_query_on_the_next_line_is_accepted(self):
+        llm = ChunkedFakeLLM([
+            (StreamMode.SEARCH,
+             ["#SEARCH:\n", "current version of genshin impact"]),
+            (StreamMode.CHAT, ["It is 6.0.\n"]),
+        ])
+        _out, _err, _llm, found = self.run_chat(["问题"], [], llm=llm)
+        self.assertEqual(found, ["current version of genshin impact"])
 
     def test_hit_list_is_silent_by_default(self):
         _out, err, _llm, _found = self.run_chat(

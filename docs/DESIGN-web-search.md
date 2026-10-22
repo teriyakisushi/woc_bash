@@ -92,6 +92,9 @@
   正文已经写进 stdout 了。这条是本次唯一改 `woc/llm.py` 行为的地方（见 §8）。
 - **标记留在历史里**：和 `#CHAT:` / `#STEP:` 同理 —— 模型模仿自己上一轮的格式，
   剥掉标记后它下一轮就不愿意写了（`docs/DESIGN-agentic-loop.md §8.1` 实测）。
+- **解析搜索词要用 StreamFilter 的完整文本，不能用 on_chunk 的拼接**：标记本身会被
+  过滤器吃掉，真实 SSE 经常把 `#SEARCH:` 单独送一块 —— 那时拼接结果里没有标记，
+  解析出来就是空搜索词（§8.2 的回归）。
 - **命中列表默认不打印**：自动搜索是"用户没按键就发生"的动作，标题 + URL 刷屏只会
   打断阅读；`WOC_DEBUG=1` 才输出 query、条数、URL、耗时。失败仍然提示一行。
 - **人工 `:search <关键词>`**：直接搜一次、把结果作为 user 消息压进历史，**不调模型**。
@@ -193,9 +196,32 @@ summary: ...
 不做"每问必搜"：固定 +1 请求与 +0.5s 延迟，而大多数问题不需要；`#SEARCH:` 把决定权
 交给模型，`max_searches=1` 兜住滥用。人工 `:search` 仍然是一条命令一次搜索。
 
+### 8.2 回归（同日）：`#SEARCH:` 单独成块导致"搜索词为空"
+
+**现象**：`woc -c --search "current version of genshin impact"` 稳定报
+`搜索失败，已让模型改用自有知识: 搜索词为空`，模型只能改用自有知识回答。
+
+**根因**：chat 用 `on_chunk` 收到的片段拼出文本再解析 `#SEARCH:`。`StreamFilter`
+会把标记本身吃掉、只把标记之后的内容交给 `on_chunk`；当模型把 `#SEARCH:` 作为
+单独一块吐出来时（真实 SSE 很常见），拼接结果就是 `" current version ..."`，
+`_split_search()` 找不到标记 → 空搜索词。之前的单测把整段当一块塞进去，所以没抓到。
+
+**修复**：
+
+- `_stream_once()` 额外返回 `call_llm_messages_stream()` 的返回值（即
+  `StreamFilter.acc`，**含标记**），解析搜索词用它；`on_chunk` 的拼接只用于写历史
+  和判断空回答；
+- `_split_search()` 改为取"标记后第一个非空行"，模型把 query 挪到下一行时也不再到空；
+- 回归测试用 `ChunkedFakeLLM` 走真实 `StreamFilter`、按小块喂数据，覆盖
+  "标记单独成块"和"query 在下一行"两种形态；端到端则用假 SSE 服务跑用户那条命令
+  （修复前 `query=[]`，修复后 `query=['current version of genshin impact']`）。
+
+**教训**：任何"以标记开头"的解析都必须基于过滤器累积的完整文本；`on_chunk` 是
+给人看的流，不是事实来源。
+
 ## 9. 验收
 
-1. `compileall` + `unittest discover -s tests`：**221 个用例全绿**（1 个 live skip）。
+1. `compileall` + `unittest discover -s tests`：**223 个用例全绿**（1 个 live skip）。
 2. 启动路径：`import woc.cli.chat` 后 `woc.search` 不在 `sys.modules`；模块数仍 157。
 3. 端到端（本地假 Search 服务）：`woc -c ":search 测试 查询"` 打到
    `/v1/tools/search`，`Authorization` 与 `{query, count, need_content:false}` 正确，
