@@ -26,7 +26,8 @@
    裸命令也继续，只有 `#CHAT:` / `#ERROR:` 结束。
 8. **搜索不进默认路径**：`woc/search.py` 只在真正搜索时延迟导入（`woc -c` 的
    `#SEARCH:` / `:search`），默认启动路径不许加载它；搜索结果注入在 messages
-   末尾，不进稳定前缀；命中列表只在 `WOC_DEBUG=1` 时打印。
+   末尾，不进稳定前缀；命中列表只在 `WOC_DEBUG=1` 时打印，但**回答后的来源行
+   必须始终打印**（静默的是过程，不是可审计性）。
 
 ## 常用命令
 
@@ -38,7 +39,7 @@ python3 woc.py --check-templates                # 模板自检（应 0 error / 2
 WOC_DEBUG=1 python3 woc.py "..."                # 观测 usage/缓存/前缀规模（stderr）
 
 python3 -m compileall -q woc tests              # 语法
-python3 -m unittest discover -s tests           # 离线回归（210+ 个用例，1 个 live skip，~600ms）
+python3 -m unittest discover -s tests           # 离线回归（230+ 个用例，1 个 live skip，~500ms）
 WOC_LIVE_TEST=1 python3 -m unittest discover -s tests   # 真调 API，默认跳过，会产生费用
 ```
 
@@ -76,7 +77,8 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 - 改安全逻辑（`woc/gate.py` 的 `is_dangerous` / `is_root_shell` / `risk_tier`）必须同步
   `tests/test_gate.py` 的 `GateTest`。
 - 新增配置项放在 `woc/config.py` 对应小节，并支持环境变量覆盖；同时更新
-  `compile.py` 的 `CONFIG_TEMPLATE`，安装器靠它把新键补进老用户的 config.toml。
+  `compile.py` 的 `CONFIG_TEMPLATE`（`tests/test_compile.py` 会比对两边：
+  少一个键、多一个键、值不同都会红）。
 - 不要为了少按一次回车放宽 `risk_tier` 的白名单。
 
 ## 提交约定

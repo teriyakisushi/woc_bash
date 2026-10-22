@@ -1,4 +1,4 @@
-# 设计摘要：网页搜索（`woc -c --search` / `:search`）
+# 设计摘要：网页搜索（`woc -c` / `:search`）
 
 > 状态：**已实现并收尾（2026-10-21，基线 `2878fa5`）**。范围是 `woc -c` 聊天模式：
 > 默认由模型按需发 `#SEARCH:`（`--no-search` 关闭），`:search <关键词>` 在 `woc -c`
@@ -97,6 +97,10 @@
   解析出来就是空搜索词（§8.2 的回归）。
 - **命中列表默认不打印**：自动搜索是"用户没按键就发生"的动作，标题 + URL 刷屏只会
   打断阅读；`WOC_DEBUG=1` 才输出 query、条数、URL、耗时。失败仍然提示一行。
+- **来源行始终打印**（§8.4）：静默的是搜索过程，不是可审计性。回答后一行
+  `[n] 域名`（本地映射，0 请求、0 token），让人分得清"联网答的"和"编的"。
+- **`:search off` / `:search on`**（§8.4）：会话内开关模型自主搜索，改的是 system
+  prompt 里的 hint，代价是前缀缓存重建一次；人工 `:search <词>` 不受影响。
 - **人工 `:search <关键词>`**：直接搜一次，然后**立刻让模型基于结果回答**（§8.3）。
   结果是带"请直接根据以上搜索结果回答：<query>"的 user 消息，紧接一轮正常回答。
   `woc -c` 与 `wocc` 共用 `search.search_command()`。
@@ -126,6 +130,7 @@ summary: ...
 | `woc -c` 模型不搜 | 1 请求/轮 | **1 请求/轮**（默认开着搜索也一样） |
 | `woc -c` 真搜一次 | — | 2 请求/轮，输入增加约 3.5k 字符（5 条 summary） |
 | `:search <词>`（chat / wocc） | — | 2 次请求：搜索 + 一轮回答（和人问一句一样） |
+| 来源行 | — | **0 请求**、0 token：本地把 `[n]` 映射成域名 |
 | 注入位置 | — | messages 末尾，**不进稳定前缀**，前缀缓存不受影响 |
 
 `SEARCH_HINT` 只在 `--search` / `[search] enabled` 时拼进 system prompt：不开搜索的
@@ -141,7 +146,8 @@ summary: ...
 两个刻意保留的语义：
 
 1. **`enabled` 默认开启**，但只表示"模型可以用 `#SEARCH:`"；`--no-search` 关本次
-   会话，配置文件关全局。人工 `:search` 两者都不受影响。
+   会话，配置文件关全局，会话内 `:search off/on` 再覆盖一层（只影响本进程）。
+   人工 `:search` 这些开关都不影响。
 2. **`base_url` 留空跟随 `api_base`**，并且两种写法（带不带 `/v1`）都归一成根地址，
    避免 `/v1/v1/tools/search` 这种 404。
 
@@ -189,7 +195,7 @@ summary: ...
 | 改动 | 决定与理由 |
 |---|---|
 | `woc -c` 默认搜索 | 不用先开开关：模型判断需要实时信息就搜。代价从"要不要开"变成"模型觉得值不值"；`--no-search` 关本次会话，`[search] enabled = false` 关全局 |
-| 命中列表不进终端 | 自动搜索是"用户没按键就发生"的动作，刷标题 + URL 只会打断阅读。默认只留一句状态；`WOC_DEBUG=1` 才打印 query / 条数 / URL / 耗时 |
+| 命中列表不进终端 | 自动搜索是"用户没按键就发生"的动作，刷标题 + URL 只会打断阅读。默认不打印命中列表（回答后只跟一行来源，见 §8.4）；`WOC_DEBUG=1` 才打印 query / 条数 / URL / 耗时 |
 | `:search` 进 `wocc` | 与 chat 共用 `search.perform()` / `search.search_command()`；搜完把结果压进上下文 |
 | 安装器补配置 | `compile.py` 把 `CONFIG_TEMPLATE` 合进 `config.toml`：**只补缺失项**，老配置的值和注释都不动。新增配置项（比如 `[search]`）装一次就到位，不用回 README 手抄 |
 
@@ -236,9 +242,19 @@ summary: ...
 **代价**：`:search` 从 1 次请求变成 2 次（搜索 + 回答）。这是它应有的语义 ——
 用户输入的就是一个问题，不是"把资料记下来"。
 
+### 8.4 收尾（同日）：来源行、会话内开关、配置模板一致性
+
+| 改动 | 理由 |
+|---|---|
+| 回答后一行来源 | 静默搜索的代价是"看不出答案是否联网"。加一行 `[n] 域名`（本地映射，0 请求），把可审计性补回来；命中列表仍然只在 debug 里 |
+| `:search off / on` | 之前关自主搜索必须重启或改配置；改成会话内切换，改 system prompt 里的 hint，代价是前缀缓存重建一次 |
+| 配置模板一致性测试 | `CONFIG_TEMPLATE` 与 `config.py` 默认值是两份事实，靠人工纪律迟早漂移。`tests/test_compile.py` 现在按集合比对键、按值比对默认值：少一个键、多一个键、值不同都会红 |
+
+顺带把标题里的 `--search` 去掉了 —— 它早就是默认值，不该再出现在名字里。
+
 ## 9. 验收
 
-1. `compileall` + `unittest discover -s tests`：**224 个用例全绿**（1 个 live skip）。
+1. `compileall` + `unittest discover -s tests`：**235 个用例全绿**（1 个 live skip）。
 2. 启动路径：`import woc.cli.chat` 后 `woc.search` 不在 `sys.modules`；模块数仍 157。
 3. 端到端（本地假 Search 服务）：`woc -c ":search 测试 查询"` 打到
    `/v1/tools/search`，`Authorization` 与 `{query, count, need_content:false}` 正确，
