@@ -29,11 +29,8 @@ def woc_main(argv):
         sys.exit(run_pipe_mode(argv, cfg))
 
     if not argv or wants_help:
-        print(f"用法: {name} <自然语言描述>")
-        print(f"示例: {name} 帮我抓一次实时资源的 snapshot 到 a.txt")
-        print(f"     {name} 解释一下 du -sh 的用法")
-        print(f"     {name} --completion bash|zsh   # 生成 shell 补全脚本")
-        print(f"管道: <命令> | {name} \"你的问题\"   # 标准输入当数据，只回答、不执行")
+        from .help import single_help     # 延迟导入：正常路径不加载帮助文案
+        single_help(name, cfg)
         sys.exit(0)
 
     if not sys.stdin.isatty():

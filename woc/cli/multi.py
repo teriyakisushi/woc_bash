@@ -18,7 +18,7 @@ HELP_LINES = (
     (":steps", "本回合的步骤审计"),
     (":explain", "解释上一条命令与输出（只发一次请求，不进历史）"),
     (":again", "重跑上一条命令（仍需确认）"),
-    (":search <关键词>", "搜索网页，并让模型根据结果直接回答（附来源）"),
+    (":search [关键词]", "搜索网页并让模型据结果回答（留空按对话推断检索词）"),
     (":help", "显示这段帮助"),
 )
 
@@ -81,18 +81,8 @@ def wocc_main(argv):
     store = session_settings(cfg)
 
     if argv and argv[0] in ("-h", "--help"):
-        print(f"用法: {name} [--loop] [首轮自然语言描述]")
-        print("进入交互式多轮会话，每轮命令的执行结果会自动反馈给 LLM。")
-        print("输入 :q / exit / quit 退出。")
-        print("提问（如“解释一下”“为什么...”）会自动进入 chat 模式，不会被执行。")
-        print("  --loop          开启粘性续步：用过 #STEP: 后，裸命令也继续（默认关闭）")
-        print("  --capture-sudo  需要 sudo 密码时捕获输出并反馈给模型")
-        print("  --last-session  恢复上一次 wocc 会话（[session] persist）")
-        print("  --sessions      列出已保存的会话")
-        print("  --resume NAME   恢复指定会话（名字来自 --sessions）")
-        print("会话内命令: :q 退出 · :more / v 展开输出 · :last 看上一条命令")
-        print("            :steps 本回合的步骤审计 · :explain 解释上一条命令与输出")
-        print("            :search <关键词> 搜索网页，并让模型根据结果直接回答")
+        from .help import multi_help       # 延迟导入：正常路径不加载帮助文案
+        multi_help(name, cfg, alias)
         sys.exit(0)
 
     if not sys.stdin.isatty():

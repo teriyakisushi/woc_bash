@@ -206,16 +206,8 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
     settings = search_settings(cfg)
 
     if args and args[0] in ("-h", "--help"):
-        if via_woc:
-            print(f"用法: {name} -c [--no-search] [首轮问题]")
-        else:
-            print(f"用法: {name} [--no-search] [首轮问题]")
-            print(f"也可以由 {prefix(cfg, 'woc_prefix')} -c 启动。")
-        print("进入支持 Markdown 渲染的多轮聊天。输入 :q / exit / quit 退出。")
-        print("  --search          强制开启模型自主搜索（默认已开启，覆盖配置）")
-        print("  --no-search       本次会话关闭模型自主搜索；:search 仍然可用")
-        print(f"  {SEARCH_COMMAND} <关键词>   搜一次网页，直接让模型根据结果回答")
-        print(f"  {SEARCH_COMMAND} off / on  本次会话开关模型自主搜索")
+        from .help import chat_help        # 延迟导入：正常路径不加载帮助文案
+        chat_help(name, cfg, via_woc)
         raise SystemExit(0)
 
     one_shot = bool(args) and not sys.stdin.isatty()
