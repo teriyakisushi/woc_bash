@@ -60,6 +60,8 @@ SESSION_DEFAULTS = {"persist": True, "max_messages": 40, "max_chars": 60000}
 # enabled 默认开启：聊天模式里由模型自己判断要不要搜（一次搜索 = 一次额外请求）。
 # 它只管模型的自主动作，人工输入的 :search 不受限制。
 # base_url 留空时跟随根级 api_base（自动补 /v1）。
+# query_by_llm 决定人工 :search 的检索词从哪来：true=让模型把原话折成关键词
+# （多一次小请求，模糊问句召回更好），false=原话直接当检索词（一次都不多花）。
 SEARCH_DEFAULTS = {
     "enabled": True,
     "base_url": "",
@@ -67,6 +69,7 @@ SEARCH_DEFAULTS = {
     "max_searches": 1,
     "max_chars": 6000,
     "timeout": 10,
+    "query_by_llm": True,
 }
 
 
@@ -263,6 +266,8 @@ def search_settings(cfg):
         "max_searches": positive("max_searches"),
         "max_chars": positive("max_chars"),
         "timeout": positive("timeout"),
+        "query_by_llm": _to_bool(
+            raw.get("query_by_llm", SEARCH_DEFAULTS["query_by_llm"])),
     }
 
 
@@ -312,6 +317,7 @@ def load_config(path=None):
 
         [search]                # 网页搜索；enabled 只控制模型能否自行 #SEARCH:
         enabled = true
+        query_by_llm = true     # 人工 :search 的检索词：true=模型折关键词，false=原话
         count = 5               # 1～50
         max_searches = 1        # 单回合模型最多搜几次
         max_chars = 6000        # 注入上下文的结果总字符上限
@@ -411,6 +417,8 @@ def load_config(path=None):
                 "WOC_SEARCH_MAX_CHARS", SEARCH_DEFAULTS["max_chars"], notes),
             "timeout": _env_positive_int(
                 "WOC_SEARCH_TIMEOUT", SEARCH_DEFAULTS["timeout"], notes),
+            "query_by_llm": _env_bool("WOC_SEARCH_QUERY_BY_LLM",
+                                      SEARCH_DEFAULTS["query_by_llm"]),
         },
     }
 
@@ -519,6 +527,9 @@ def load_config(path=None):
                         cfg["search"]["timeout"] = _file_positive_int(
                             value, SEARCH_DEFAULTS["timeout"], notes,
                             "search.timeout")
+                    elif (key == "query_by_llm"
+                          and "WOC_SEARCH_QUERY_BY_LLM" not in os.environ):
+                        cfg["search"]["query_by_llm"] = _to_bool(value)
                     continue
                 if section == "session":
                     if key == "persist" and "WOC_SESSION_PERSIST" not in os.environ:

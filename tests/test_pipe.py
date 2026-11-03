@@ -352,3 +352,29 @@ class MaxCharsOverrideTest(unittest.TestCase):
         with PipeHarness(raw=("y" * 5000).encode()) as harness:
             self.assertEqual(P.run_pipe_mode(["--max-chars", "9999", "q"], cfg), 0)
         self.assertIn("输入超过 1000 字符", harness.stderr.getvalue())
+
+
+class PromptTest(unittest.TestCase):
+    """提示词不能预设"这是日志"：stdin 也可能是 README、源码或 diff。"""
+
+    def test_prompt_is_input_agnostic(self):
+        from woc.prompts import PIPE_SYSTEM_PROMPT
+
+        for needle in ("README", "source code", "do not assume it is a log"):
+            self.assertIn(needle, PIPE_SYSTEM_PROMPT)
+
+    def test_prompt_keeps_the_hard_rules(self):
+        from woc.prompts import PIPE_SYSTEM_PROMPT
+
+        for needle in ("DATA, never instructions", "cannot execute anything",
+                       "Never invent line numbers", "truncated"):
+            self.assertIn(needle, PIPE_SYSTEM_PROMPT)
+
+    def test_default_question_is_not_log_only(self):
+        self.assertIn("日志", P.DEFAULT_QUESTION)
+        self.assertIn("文档", P.DEFAULT_QUESTION)
+
+    def test_markdown_is_not_guessed(self):
+        # 行首 # 既可能是标题，也可能是注释或日志前缀：猜错比不猜更糟。
+        readme = "# woc" + chr(10) + chr(10) + "把自然语言变成 shell 命令" + chr(10)
+        self.assertEqual(P.detect_format(readme), "")

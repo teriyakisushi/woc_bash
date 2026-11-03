@@ -111,7 +111,7 @@ class ConfigTemplateConsistencyTest(unittest.TestCase):
         "thinking": {"enabled", "effort"},
         "pipe": {"enabled"},
         "search": {"enabled", "base_url", "count", "max_searches",
-                   "max_chars", "timeout"},
+                   "max_chars", "timeout", "query_by_llm"},
         "budget": {"context_tokens", "max_output_tokens", "max_input_chars"},
         "debug": {"enabled"},
         "session": {"persist", "max_messages", "max_chars"},

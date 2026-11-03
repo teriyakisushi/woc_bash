@@ -139,6 +139,7 @@ count = 5
 max_searches = 1
 max_chars = 6000
 timeout = 10
+query_by_llm = true
 
 [budget]
 context_tokens = 64000     # 模型上下文窗口
@@ -316,7 +317,8 @@ woc -c --no-search "最新的 DeepSeek 版本"  # 本次会话不自动搜索
 
 ```text
 [user] :search gitea最新版本
-[woc] 已搜索「gitea最新版本」，5 条结果
+[woc] 检索词: gitea 最新版本（原话: gitea最新版本）
+[woc] 已搜索「gitea 最新版本」，5 条结果
 [assistant] 根据搜索结果，Gitea 社区版最新稳定版是 v28.2.0 [4][5]。
 [woc] 来源: [4] gitea.com · [5] github.com
 
@@ -330,6 +332,7 @@ count = 5              # 每次取几条（1～50）
 max_searches = 1       # 单回合模型最多搜几次
 max_chars = 6000       # 注入上下文的结果总字符上限
 timeout = 10           # 独立于根级 timeout=30
+query_by_llm = true    # :search 检索词：true=模型折关键词，false=原话直接用
 # base_url = ""        # 空=跟随 api_base，自动补 /v1
 ```
 
@@ -340,7 +343,9 @@ timeout = 10           # 独立于根级 timeout=30
   告诉模型"搜不了，别编链接"。
 - **人工**：`:search <关键词>`，直接搜一次，然后**马上让模型根据结果回答**（不用再补
   一句"go ahead"）。它不受 `--no-search` / `enabled` 限制 —— 那个开关管的是模型，
-  不是人。
+  不是人。检索词默认由模型从你的原话里折出来（`[search] query_by_llm`）；
+  `:search` 留空则按刚才的对话推断。换了词会先打一行
+  `检索词: ...（原话: ...）`，看得见它到底搜了什么。
 - **开关**：`:search off` / `:search on` 只切本次会话的模型自主搜索，不用重启。
   它改的是 system prompt 里的那段说明，所以前缀缓存会重建一次。`wocc` 没有自主
   搜索，这条命令在 `wocc` 里只会提示一句，不会去搜 "off"。
@@ -566,7 +571,8 @@ wocc
 - `:steps` 打印本回合每一步的命令、退出码与耗时；
 - `:explain` 把上一条命令与输出发给模型解释（只发一次请求，不执行任何东西，也不进历史）；
 - `:again` 重跑上一条命令（仍然过危险检查与人工确认，结果写回历史）；
-- `:search <关键词>` 搜一次网页，让模型立刻根据结果回答，并在回答后打一行来源；
+- `:search [关键词]` 搜一次网页，让模型立刻根据结果回答，并在回答后打一行来源；
+  留空则按刚才的对话推断检索词；
 - `:more` / `v` 展开输出，`:last` 重看上一条命令。
 
 命令生成后：

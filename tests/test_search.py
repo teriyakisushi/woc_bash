@@ -36,7 +36,8 @@ BASE_CFG = {
                "woc_chat_prefix": "woc_chat"},
     "ui": {"spinner": False},
     "search": {"enabled": True, "base_url": "", "count": 5,
-               "max_searches": 1, "max_chars": 6000, "timeout": 10},
+               "max_searches": 1, "max_chars": 6000, "timeout": 10,
+               "query_by_llm": True},
 }
 
 
@@ -232,7 +233,8 @@ class ConfigTest(unittest.TestCase):
             cfg = load_config(path="/nonexistent/config.toml")
         self.assertEqual(cfg["search"], {
             "enabled": True, "base_url": "", "count": 5,
-            "max_searches": 1, "max_chars": 6000, "timeout": 10})
+            "max_searches": 1, "max_chars": 6000, "timeout": 10,
+            "query_by_llm": True})
         # 默认开启：聊天模式里模型自己判断要不要搜。
         self.assertTrue(search_enabled(cfg))
         self.assertEqual(search_settings(cfg)["count"], 5)
@@ -366,6 +368,8 @@ class ChatSearchTest(unittest.TestCase):
                 mock.patch.object(chat, "load_config", return_value=cfg), \
                 mock.patch.object(chat, "call_llm_messages_stream", llm), \
                 mock.patch.object(search_mod, "search", fake_search), \
+                mock.patch.object(search_mod, "derive_query",
+                                  lambda *a, **k: ""), \
                 redirect_stdout(out), redirect_stderr(err):
             chat.woc_chat_main(argv)
         return out.getvalue(), err.getvalue(), llm, found
@@ -390,6 +394,8 @@ class ChatSearchTest(unittest.TestCase):
                                   lambda *a, **k: next(feeds)), \
                 mock.patch.object(chat, "call_llm_messages_stream", llm), \
                 mock.patch.object(search_mod, "search", fake_search), \
+                mock.patch.object(search_mod, "derive_query",
+                                  lambda *a, **k: ""), \
                 redirect_stdout(out), redirect_stderr(err):
             chat.woc_chat_main(argv)
         return out.getvalue(), err.getvalue(), llm, found
@@ -562,6 +568,8 @@ class SearchCommandSharedTest(unittest.TestCase):
                 search_mod, "search",
                 lambda q, c, ori_question=None: [
                     search_mod._normalize(raw_hit(1))]), \
+                mock.patch.object(search_mod, "derive_query",
+                                  lambda *a, **k: ""), \
                 redirect_stderr(err):
             handled = search_mod.search_command(
                 ":search DeepSeek", messages, cfg, "woc")
@@ -582,6 +590,8 @@ class SearchCommandSharedTest(unittest.TestCase):
 
         err = io.StringIO()
         with mock.patch.object(search_mod, "search", boom), \
+                mock.patch.object(search_mod, "derive_query",
+                                  lambda *a, **k: ""), \
                 redirect_stderr(err):
             handled = search_mod.search_command(":search x", messages, cfg, "woc")
         self.assertFalse(handled, "搜索失败时调用方不该继续问模型")
@@ -619,6 +629,8 @@ class WoccSearchCommandTest(unittest.TestCase):
                 mock.patch.object(multi, "messages_prefix",
                                   lambda **kwargs: messages), \
                 mock.patch.object(search_mod, "search", fake_search), \
+                mock.patch.object(search_mod, "derive_query",
+                                  lambda *a, **k: ""), \
                 mock.patch.object(multi, "run_turn",
                                   lambda *a, **k: rounds.append(True)), \
                 redirect_stderr(err), redirect_stdout(io.StringIO()):
@@ -630,6 +642,156 @@ class WoccSearchCommandTest(unittest.TestCase):
         self.assertIn("来源: [1] example.com", err.getvalue())
         self.assertTrue(any("<search_results" in str(item.get("content"))
                             for item in messages))
+
+
+class DeriveQueryTest(unittest.TestCase):
+    """检索词清洗：模型的回复不能原样当 query。"""
+
+    def test_parse_strips_label_and_quotes(self):
+        reply = "query: " + chr(34) + "QUIC HTTP/3 区别" + chr(34) + chr(10) + "因为经常混着说"
+        self.assertEqual(search_mod.parse_query(reply), "QUIC HTTP/3 区别")
+
+    def test_parse_drops_marker_and_keeps_first_line(self):
+        self.assertEqual(search_mod.parse_query("#CHAT: gitea 最新版本"),
+                         "gitea 最新版本")
+        self.assertEqual(search_mod.parse_query("#SEARCH: deepseek v4"),
+                         "deepseek v4")
+
+    def test_parse_empty(self):
+        self.assertEqual(search_mod.parse_query(""), "")
+        self.assertEqual(search_mod.parse_query(None), "")
+
+    def test_derive_kills_thinking_and_keeps_cfg_intact(self):
+        from woc import llm as llm_mod
+
+        seen = {}
+
+        def fake_llm(messages, cfg, on_chunk=None, on_mode=None):
+            seen["messages"] = messages
+            seen["cfg"] = cfg
+            return "QUIC http3 区别"
+
+        cfg = make_cfg(thinking={"enabled": True, "effort": "max"})
+        with mock.patch.object(llm_mod, "call_llm_messages", fake_llm):
+            got = search_mod.derive_query("帮我看看 quic 和 http3 的区别",
+                                          [], cfg, "woc")
+        self.assertEqual(got, "QUIC http3 区别")
+        self.assertEqual(seen["messages"][0]["role"], "system")
+        self.assertFalse(seen["cfg"]["thinking"]["enabled"],
+                         "检索词请求不该开着思考")
+        self.assertTrue(cfg["thinking"]["enabled"], "原 cfg 不能被就地改掉")
+
+    def test_derive_falls_back_on_error(self):
+        from woc import llm as llm_mod
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("network down")
+
+        with mock.patch.object(llm_mod, "call_llm_messages", boom):
+            got = search_mod.derive_query("关键词", [], make_cfg(), "woc")
+        self.assertEqual(got, "", "折不出检索词就回退原话，不能抛异常")
+
+    def test_derive_without_anything_to_search(self):
+        self.assertEqual(search_mod.derive_query("", [], make_cfg(), "woc"), "")
+
+
+class QueryByLlmTest(unittest.TestCase):
+    """`[search] query_by_llm`：true 让模型折关键词，false 原样使用。"""
+
+    def run_command(self, text, cfg=None, derived="", messages=None):
+        cfg = cfg or make_cfg()
+        found = []
+
+        def fake_search(query, _cfg, ori_question=None):
+            found.append((query, ori_question))
+            return [search_mod._normalize(raw_hit(1))]
+
+        msgs = [] if messages is None else messages
+        err = io.StringIO()
+        with mock.patch.object(search_mod, "search", fake_search), \
+                mock.patch.object(search_mod, "derive_query",
+                                  lambda *a, **k: derived), \
+                redirect_stderr(err), redirect_stdout(io.StringIO()):
+            hits = search_mod.search_command(text, msgs, cfg, "woc")
+        return hits, found, err.getvalue(), msgs
+
+    def test_llm_query_uses_the_derived_keywords(self):
+        hits, found, err, _msgs = self.run_command(
+            ":search 帮我看看 quic 和 http3 现在到底什么关系",
+            derived="quic http3 区别")
+        self.assertTrue(hits)
+        self.assertEqual(found[0][0], "quic http3 区别")
+        self.assertEqual(found[0][1], "帮我看看 quic 和 http3 现在到底什么关系")
+        self.assertIn("检索词", err, "换了检索词就要让用户看见")
+
+    def test_raw_mode_uses_the_text_as_is(self):
+        cfg = make_cfg(search={"query_by_llm": False})
+        with mock.patch.object(search_mod, "derive_query") as derive:
+            hits, found, err, _msgs = self.run_command(
+                ":search gitea 最新版本", cfg=cfg)
+        self.assertTrue(hits)
+        self.assertEqual(found[0][0], "gitea 最新版本")
+        derive.assert_not_called()
+        self.assertNotIn("检索词", err)
+
+    def test_llm_failure_falls_back_to_raw(self):
+        hits, found, _err, _msgs = self.run_command(
+            ":search gitea 最新版本", derived="")
+        self.assertTrue(hits)
+        self.assertEqual(found[0][0], "gitea 最新版本")
+
+    def test_bare_search_uses_the_conversation(self):
+        messages = [{"role": "user", "content": "quic 和 http3 现在什么关系"}]
+        hits, found, _err, _msgs = self.run_command(
+            ":search", derived="quic http3", messages=messages)
+        self.assertTrue(hits)
+        self.assertEqual(found[0][0], "quic http3")
+
+    def test_bare_search_without_llm_is_a_usage_error(self):
+        cfg = make_cfg(search={"query_by_llm": False})
+        hits, found, err, _msgs = self.run_command(":search", cfg=cfg)
+        self.assertFalse(hits)
+        self.assertEqual(found, [])
+        self.assertIn("用法", err)
+
+    def test_block_asks_about_the_original_question(self):
+        _hits, _found, _err, msgs = self.run_command(
+            ":search 最新的 deepseek 版本是多少", derived="deepseek 版本")
+        content = msgs[0]["content"]
+        self.assertIn("请直接根据", content)
+        self.assertIn("最新的 deepseek 版本是多少", content,
+                      "块末要回答原问题，不是回答关键词")
+
+
+class QueryByLlmConfigTest(unittest.TestCase):
+    def test_default_is_on(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            cfg = load_config(path="/nonexistent/config.toml")
+        self.assertIs(cfg["search"]["query_by_llm"], True)
+        self.assertIs(search_settings(cfg)["query_by_llm"], True)
+
+    def test_env_override(self):
+        with mock.patch.dict(os.environ,
+                             {"WOC_SEARCH_QUERY_BY_LLM": "false"},
+                             clear=True):
+            cfg = load_config(path="/nonexistent/config.toml")
+        self.assertIs(search_settings(cfg)["query_by_llm"], False)
+
+    def test_file_value_and_bad_value(self):
+        for value, expected in (("false", False), ("true", True),
+                                ("nonsense", True)):
+            with tempfile.NamedTemporaryFile("w", suffix=".toml",
+                                             delete=False) as handle:
+                handle.write("[search]" + chr(10) + "query_by_llm = "
+                             + value + chr(10))
+                path = handle.name
+            try:
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    cfg = load_config(path=path)
+            finally:
+                os.unlink(path)
+            self.assertIs(search_settings(cfg)["query_by_llm"], expected,
+                          "坏值只当没写，回默认 true，不是炸掉")
 
 
 class SourcesTest(unittest.TestCase):

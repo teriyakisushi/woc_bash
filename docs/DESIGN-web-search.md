@@ -129,7 +129,7 @@ summary: ...
 | 单轮 `woc` 行为 | — | 完全不变 |
 | `woc -c` 模型不搜 | 1 请求/轮 | **1 请求/轮**（默认开着搜索也一样） |
 | `woc -c` 真搜一次 | — | 2 请求/轮，输入增加约 3.5k 字符（5 条 summary） |
-| `:search <词>`（chat / wocc） | — | 2 次请求：搜索 + 一轮回答（和人问一句一样） |
+| `:search <词>`（chat / wocc） | — | 2 次请求：搜索 + 一轮回答（和人问一句一样）；`query_by_llm=true` 多一次折词请求（§8.5） |
 | 来源行 | — | **0 请求**、0 token：本地把 `[n]` 映射成域名 |
 | 注入位置 | — | messages 末尾，**不进稳定前缀**，前缀缓存不受影响 |
 
@@ -252,9 +252,30 @@ summary: ...
 
 顺带把标题里的 `--search` 去掉了 —— 它早就是默认值，不该再出现在名字里。
 
+### 8.5 `[search] query_by_llm`：检索词由谁决定（2026-11-03）
+
+**现象**：`:search 帮我看看 quic 和 http3 现在到底什么关系` 把整句当 query。
+搜索引擎对这种长问句召回明显差；而留空 `:search` 只会提示用法，等于把「该搜什么」甩回给用户。
+
+**改动**：新增 `[search] query_by_llm`（默认 `true`，env `WOC_SEARCH_QUERY_BY_LLM`）。`true` 时用**一次小请求**（`QUERY_PROMPT`，显式关 thinking）把原话 + 最近 3 条用户发言折成 2–10 词检索词；换了词先打一行 `检索词: <关键词>（原话: ...）`。
+
+| 决定 | 为什么 |
+|---|---|
+| 默认 `true` | 用户抱怨的正是「整句当 query」召回差；`:search` 是显式动作，多一次小请求可接受 |
+| 只取一条 query | 多 query 合并让成本与延迟不受控，且 rerank 只能挂在一份结果集上 |
+| 原话单独作 `ori_question` 往下传 | 回答要针对**原话**：`search()` 用它 rerank，`render_results(ask_text=...)` 用它收尾；否则模型会去「回答关键词」 |
+| 折不出来回退原话 | 网络失败、模型回废话、空输入都不该让 `:search` 失败，可用性不许倒退 |
+| 只有留空才允许推断 | 显式给了词就别自作聪明；`false` 时留空只提示用法 |
+| 不动稳定前缀 | 检索词是一次性运行时数据，进 messages，不进 system prompt，缓存不重建 |
+
+**成本**：`query_by_llm = true` 时 `:search` 从 2 次请求变 3 次（折词 + 搜索 + 回答）；`false` 保持 2 次。`max_searches` 语义不变 —— 它管的是模型自搜，与人工指令无关。
+
+**测试**：`tests/test_search.py` 的 `DeriveQueryTest` / `QueryByLlmTest` / `QueryByLlmConfigTest`；全量 **260 用例**
+（1 个 live skip）。
+
 ## 9. 验收
 
-1. `compileall` + `unittest discover -s tests`：**235 个用例全绿**（1 个 live skip）。
+1. `compileall` + `unittest discover -s tests`：**260 个用例全绿**（1 个 live skip）。
 2. 启动路径：`import woc.cli.chat` 后 `woc.search` 不在 `sys.modules`；模块数仍 157。
 3. 端到端（本地假 Search 服务）：`woc -c ":search 测试 查询"` 打到
    `/v1/tools/search`，`Authorization` 与 `{query, count, need_content:false}` 正确，

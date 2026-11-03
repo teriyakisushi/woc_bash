@@ -98,9 +98,22 @@
 | `max_searches` | `1` | `WOC_SEARCH_MAX` | 单回合模型最多搜几次；用尽后模型再要搜会被拒绝并提示 |
 | `max_chars` | `6000` | `WOC_SEARCH_MAX_CHARS` | 注入上下文的结果总字符上限；仍被 `[budget]` 夹住 |
 | `timeout` | `10` | `WOC_SEARCH_TIMEOUT` | 单次搜索超时（秒），与根级 `timeout` 独立 |
+| `query_by_llm` | `true` | `WOC_SEARCH_QUERY_BY_LLM` | 人工 `:search` 的检索词由谁来定：`true` 让模型把原话折成关键词，`false` 原话直接当 query |
 
 `enabled` 只控制**模型**能不能自己搜（默认开）；人工在 `woc -c` / `wocc` 里输入的
 `:search <关键词>` 不受它限制 —— 那是显式动作，一次搜索 + 一轮回答，两次请求。
+
+`:search` 默认不让原话直接进搜索引擎：问「这事后来怎么样了」这种句子，
+整句检索召回很差。`query_by_llm = true`（默认）会先用一次小请求，把原话（连同最近几轮
+用户发言）折成一条 2～10 词的检索词；换了词就先在 stderr 打一行
+`检索词: <关键词>（原话: ...）`。折不出来（网络失败、模型输出不可用、或根本
+没内容可搜）就原样用原话，搜索本身照常进行。
+
+`query_by_llm = false` 是原来的行为：原话直接当 query，少一次请求，代价是
+自然语言问句召回差一些。
+
+`:search` 后面**留空**时，按刚才的对话推断要搜什么（只在 `query_by_llm = true` 下可用）；
+`false` 时留空只提示用法。
 
 命中列表默认不打印，`WOC_DEBUG=1` 时才输出标题、URL、条数与耗时；但**回答之后
 始终有一行来源**（最多 5 个域名），用来判断这个答案有没有联网依据。搜索失败会打印
@@ -246,6 +259,7 @@ count = 5
 max_searches = 1
 max_chars = 6000
 timeout = 10
+query_by_llm = true
 # base_url = ""        # 可选：空=跟随根级 api_base
 
 [budget]

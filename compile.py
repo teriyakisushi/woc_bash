@@ -84,6 +84,7 @@ enabled = true
 
 [search]
 enabled = true
+query_by_llm = true
 base_url = ""
 count = 5
 max_searches = 1

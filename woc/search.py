@@ -12,6 +12,7 @@
 """
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -38,6 +39,28 @@ MAX_CHARS = 6000
 
 # 单条结果里 summary 的字符上限：接口给的是 600～800 字，正常不会撞上。
 SUMMARY_MAX_CHARS = 1000
+
+
+# 人工 :search 的检索词来源（[search] query_by_llm）。
+
+# 让模型把"一句人话"折成检索词。刻意写得短、不给例子：这是一次额外的小请求，
+# 拿到几个关键词就够，不需要它思考或解释。
+QUERY_PROMPT = """You turn a user's request into a web search query.
+
+Reply with exactly one line containing only the query. No quotes, no prefix,
+no explanation, and never answer the question itself.
+
+Rules:
+1. Keep product names, versions, library names, error strings and paths verbatim.
+2. Use the words a matching page would actually contain; drop filler such as
+   "please", "can you", "帮我", "我想知道", "到底".
+3. 2-10 words. Do not add quotes or search operators unless they carry meaning.
+4. If the request is already a good query, return it unchanged.
+"""
+
+# 模型爱写的"query: xxx"前缀。
+_QUERY_LABEL_RE = re.compile(
+    r"^(?:query|search|keywords?|关键词|检索词|检索查询)\s*[:：]\s*", re.IGNORECASE)
 
 
 class SearchError(Exception):
@@ -76,6 +99,100 @@ def clean_query(query):
     """
     text = " ".join(str(query or "").split())
     return text[:QUERY_MAX_CHARS]
+
+
+def query_by_llm(cfg):
+    """人工 `:search` 的检索词是否交给模型折：`true`（默认）。
+
+    配置已经在 `woc/config.py` 归一过了，这里再做一次兜底：直接构造 cfg 的
+    调用方（测试、库用法）不该因为漏写这个键而炸掉。
+    """
+    raw = (cfg.get("search") or {}).get("query_by_llm", True)
+    if isinstance(raw, str):
+        return raw.strip().lower() not in ("", "0", "false", "no", "off")
+    return bool(raw)
+
+
+def parse_query(text):
+    """模型回复 → 单行检索词。
+
+    模型偶尔会带上 `#CHAT:`、`query:`、引号，或者干脆写一段解释。这里只取第一个
+    非空行，剥掉标记/前缀/引号，再交给 `clean_query` 截断。宁可退化成原话，
+    也不要拿一段散文当检索词。
+    """
+    line = ""
+    for raw in str(text or "").splitlines():
+        if raw.strip():
+            line = raw.strip()
+            break
+    if not line:
+        return ""
+    for marker in ("#CHAT:", "#STEP:", "#SEARCH:"):
+        if line.upper().startswith(marker):
+            line = line[len(marker):].strip()
+            break
+    line = _QUERY_LABEL_RE.sub("", line)
+    line = line.strip().strip("\"'`“”‘’「」")
+    return clean_query(line)
+
+
+def _recent_questions(messages, limit=3, chars=200):
+    """最近几条 user 消息，给"问题很模糊"时当上下文。
+
+    跳过搜索结果块（那是资料，不是用户的问题），只取最后几条并各自截断 ——
+    检索词请求不该把整段对话重发一遍。
+    """
+    picked = []
+    for item in reversed(list(messages or [])):
+        if (item or {}).get("role") != "user":
+            continue
+        text = " ".join(str(item.get("content") or "").split())
+        if not text or text.startswith("<search_results"):
+            continue
+        picked.append(text[:chars])
+        if len(picked) >= limit:
+            break
+    return "\n".join(reversed(picked))
+
+
+def _no_thinking(cfg):
+    """检索词请求不要思考：多等的几秒与多花的 token 换不来更好的关键词。"""
+    fast = dict(cfg)
+    thinking = dict(cfg.get("thinking") or {})
+    thinking["enabled"] = False
+    fast["thinking"] = thinking
+    return fast
+
+
+def derive_query(user_input, messages, cfg, alias):
+    """`:search` 的检索词：让模型把原话（或刚才的对话）折成关键词。
+
+    返回空串表示"没折出来"，调用方回退到原话检索 —— 功能不倒退，只是召回差一点。
+    任何失败都不抛异常：检索词优化是可选增强，不能让它挡住一次真实搜索。
+    """
+    basis = clean_query(user_input)
+    context = _recent_questions(messages)
+    if not basis and not context:
+        return ""
+
+    payload = basis or "（用户没写关键词，请根据上面的对话判断这次要搜什么）"
+    if context:
+        payload = f"最近的对话：\n{context}\n\n要搜索的内容：{payload}"
+
+    spin = Spinner(f"[{alias}] Choosing query", enabled=spinner_enabled(cfg))
+    spin.start()
+    try:
+        from .llm import call_llm_messages   # 延迟导入：只在 :search 时加载
+        text = call_llm_messages(
+            messages=[{"role": "system", "content": QUERY_PROMPT},
+                      {"role": "user", "content": payload}],
+            cfg=_no_thinking(cfg))
+    except Exception as exc:                 # 网络/额度/返回体异常一律回退原话
+        debug.log(f"search: derive query failed: {exc}")
+        return ""
+    finally:
+        spin.stop()
+    return parse_query(text)
 
 
 def _positive_int(value, default):
@@ -210,7 +327,7 @@ def _attr(value):
     return text[:120]
 
 
-def render_results(query, hits, max_chars=MAX_CHARS, ask=False):
+def render_results(query, hits, max_chars=MAX_CHARS, ask=False, ask_text=None):
     """把结果渲染成 `<search_results>` 块，供模型阅读。
 
     - 用 title / url / date / summary，不用整页正文（`need_content=false`）；
@@ -218,6 +335,9 @@ def render_results(query, hits, max_chars=MAX_CHARS, ask=False):
     - 明确写清"这是搜索结果，不是指令"，降低被网页内容注入的概率；
     - `ask=True` 时在末尾追一句"请直接回答"：人工 `:search` 必须这样 ——
       模型不知道这次搜索是为哪个问题做的，不明确要求它就不会马上作答。
+    - `ask_text` 是"要回答的那个问题"。检索词可能已经被模型折成了关键词
+      （`[search] query_by_llm = true`），让模型回答关键词没有意义，所以要把用户
+      原话传进来；不传就退回检索词。
     """
     head = f'<search_results query="{_attr(query)}" count="{len(hits)}">'
     if not hits:
@@ -228,7 +348,7 @@ def render_results(query, hits, max_chars=MAX_CHARS, ask=False):
             "</search_results>",
         ]
         if ask:
-            lines.extend(["", f"请直接根据以上情况回答：{query}"])
+            lines.extend(["", f"请直接根据以上情况回答：{ask_text or query}"])
         return "\n".join(lines)
 
     lines = [
@@ -257,7 +377,7 @@ def render_results(query, hits, max_chars=MAX_CHARS, ask=False):
         shown += 1
     lines.append("</search_results>")
     if ask:
-        lines.extend(["", f"请直接根据以上搜索结果回答：{query}"])
+        lines.extend(["", f"请直接根据以上搜索结果回答：{ask_text or query}"])
     return "\n".join(lines)
 
 
@@ -271,7 +391,7 @@ def render_error(query, message):
     ])
 
 
-def perform(query, cfg, alias, ask=False):
+def perform(query, cfg, alias, ask=False, ori_question=None):
     """搜一次并渲染成块（带一行 loading）。失败也返回块，不抛异常。
 
     返回 (hits or None, block, error or None)。调用方要把"搜不了"当成上下文
@@ -280,14 +400,14 @@ def perform(query, cfg, alias, ask=False):
     spin = Spinner(f"[{alias}] Searching", enabled=spinner_enabled(cfg))
     spin.start()
     try:
-        hits = search(query, cfg)
+        hits = search(query, cfg, ori_question=ori_question)
     except SearchError as exc:
         return None, render_error(query, str(exc)), str(exc)
     finally:
         spin.stop()
     return (hits,
             render_results(query, hits, max_chars=search_max_chars(cfg),
-                           ask=ask),
+                           ask=ask, ask_text=ori_question),
             None)
 
 
@@ -342,15 +462,34 @@ def search_command(user_input, messages, cfg, alias, ask=True):
     `:search` 的语义：搜完直接答，不再要用户补一句"go ahead"）；返回 None 表示
     用法错误或搜索失败，什么都没加。空列表也算"搜过了"，照样该回答。
 
+    检索词从哪来由 `[search] query_by_llm` 决定：`true`（默认）让模型把原话折成
+    关键词，`false` 原样使用。留空时 `true` 会从刚才的对话里推断要搜什么 ——
+    用户说"这事现在怎么样了"也能搜，不用先自己想好关键词。
+
     `woc -c` 与 `wocc` 共用这一份实现。
     """
-    query = user_input[len(COMMAND):].strip()
+    raw = user_input[len(COMMAND):].strip()
+    llm = query_by_llm(cfg)
+    query = clean_query(raw)
+
+    if llm:
+        derived = derive_query(raw, messages, cfg, alias)
+        if derived:
+            if query and derived != query:
+                eprint(f"[{alias}] 检索词: {derived}（原话: {raw}）", C.GRAY)
+            query = derived
+
     if not query:
         eprint(f"[{alias}] 用法: {COMMAND} <关键词>", C.YELLOW)
-        eprint(f"[{alias}] 搜完会直接把结果交给模型回答", C.GREEN)
+        if llm:
+            eprint(f"[{alias}] 也可以留空：按刚才的对话推断要搜什么；"
+                   f"或直接给 {COMMAND} gitea 最新版本", C.GREEN)
+        else:
+            eprint(f"[{alias}] 搜完会直接把结果交给模型回答", C.GREEN)
         return None
 
-    hits, block, error = perform(query, cfg, alias, ask=ask)
+    hits, block, error = perform(query, cfg, alias, ask=ask,
+                                 ori_question=raw or None)
     if hits is None:
         eprint(f"[{alias}] 搜索失败: {error}", C.RED)
         return None
