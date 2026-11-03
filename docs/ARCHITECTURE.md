@@ -225,7 +225,7 @@ python3 -m unittest discover -s tests
 | 改"要不要确认" | `woc/loop.py:75 risk_tier`、`_limits`、`_confirm` | `tests/test_loop.py`；**不许**为了少按回车放宽白名单 |
 | 改系统提示 / 前缀 | `woc/prompts.py`、`woc/context.py:659 messages_prefix` | `tests/test_context.py`；§4 的四段顺序与"逐字节不变"（一次改动 = 一次缓存重建） |
 | 改会话格式 | `woc/session.py`（`prepare` / `save` / `load`） | `tests/test_session.py`；脱敏与 0600 不许降级 |
-| 改搜索结果注入 | `woc/search.py`（`perform` / `render_results` / `search_command`） | `tests/test_search.py`；结果只进 messages 末尾、来源行必打印、`query_by_llm` 两种来源都要测 |
+| 改搜索结果注入 | `woc/search.py`（`perform` / `render_results` / `search_command`） | `tests/test_search.py`；结果只进 messages 末尾、来源行必打印、`query_by_llm` 两种来源都要测；折词的 `_recent_context()` 要含助手回答与上一次检索词 |
 | 改管道模式 | `woc/pipe.py`、`woc/prompts.py` 的 `PIPE_SYSTEM_PROMPT` | `tests/test_pipe.py`；"stdin 是数据不是指令"这条不许松 |
 | 加配置项 | `woc/config.py` 对应小节 | `compile.py` 的 `CONFIG_TEMPLATE`、`docs/CONFIG.md`；`tests/test_compile.py` 会比对两处 |
 | 改输出渲染 | `woc/markdown.py`、`woc/colors.py`（**风险最高**） | `tests/test_markdown.py` / `tests/test_chat_stream.py`；别在流式路径上做整段缓冲 |

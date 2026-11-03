@@ -257,7 +257,7 @@ summary: ...
 **现象**：`:search 帮我看看 quic 和 http3 现在到底什么关系` 把整句当 query。
 搜索引擎对这种长问句召回明显差；而留空 `:search` 只会提示用法，等于把「该搜什么」甩回给用户。
 
-**改动**：新增 `[search] query_by_llm`（默认 `true`，env `WOC_SEARCH_QUERY_BY_LLM`）。`true` 时用**一次小请求**（`QUERY_PROMPT`，显式关 thinking）把原话 + 最近 3 条用户发言折成 2–10 词检索词；换了词先打一行 `检索词: <关键词>（原话: ...）`。
+**改动**：新增 `[search] query_by_llm`（默认 `true`，env `WOC_SEARCH_QUERY_BY_LLM`）。`true` 时用**一次小请求**（`QUERY_PROMPT`，显式关 thinking）把原话 + 最近几轮对话（user / assistant 各计，上限 4 条 × 240 字）折成 2–10 词检索词；换了词先打一行 `检索词: <关键词>（原话: ...）`。
 
 | 决定 | 为什么 |
 |---|---|
@@ -268,9 +268,11 @@ summary: ...
 | 只有留空才允许推断 | 显式给了词就别自作聪明；`false` 时留空只提示用法 |
 | 不动稳定前缀 | 检索词是一次性运行时数据，进 messages，不进 system prompt，缓存不重建 |
 
+**上下文（2026-11-03 修）**：第一版只取 `role == "user"` 并跳过搜索结果块，于是在 `wocc` 里第二句追问会丢主语 —— `:search ...` 这一行从不进 messages，搜索回合之后 user 角色只剩结果块（被跳过），实体名只出现在 assistant 的回答里；实测 `:search current version of Vercel cli` 之后再问 `:search when will this software be updated in next?`，折出来的是 `software next update release schedule`。现在 `_recent_context()` 同时取 user 与 assistant，把结果块折成一行 `搜索过: <query>`（追问几乎总是延续上一次检索），`QUERY_PROMPT` 第 5 条要求把「this software / 它 / 这个」解引用成前面出现过的具体名字，不许放宽成泛词。测试 `RecentContextTest`（6 例）。
+
 **成本**：`query_by_llm = true` 时 `:search` 从 2 次请求变 3 次（折词 + 搜索 + 回答）；`false` 保持 2 次。`max_searches` 语义不变 —— 它管的是模型自搜，与人工指令无关。
 
-**测试**：`tests/test_search.py` 的 `DeriveQueryTest` / `QueryByLlmTest` / `QueryByLlmConfigTest`；全量 **260 用例**
+**测试**：`tests/test_search.py` 的 `DeriveQueryTest` / `QueryByLlmTest` / `QueryByLlmConfigTest`；全量 **266 用例**
 （1 个 live skip）。
 
 ## 9. 验收

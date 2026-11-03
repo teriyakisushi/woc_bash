@@ -831,5 +831,87 @@ class LazyImportTest(unittest.TestCase):
                          "chat 在所有命令的启动路径上，search 必须延迟导入")
 
 
+class RecentContextTest(unittest.TestCase):
+    """折词时的上下文：不能只看 user，还得看 assistant 与上一次的检索词。
+
+    真实踩到过：`wocc` 里先搜 "Vercel CLI"，再问 "when will this software be
+    updated"，折出来的是 "software next update release schedule" —— 因为
+    `:search` 这一行不进 messages，user 角色只剩结果块（被跳过），而实体名
+    只出现在 assistant 的回答里。
+    """
+
+    def ctx(self, messages, **kwargs):
+        return search_mod._recent_context(messages, **kwargs)
+
+    def test_includes_user_and_assistant(self):
+        messages = [
+            {"role": "user", "content": "wocc 里怎么退出"},
+            {"role": "assistant", "content": "输入 :q 退出。"},
+        ]
+        got = self.ctx(messages)
+        self.assertIn("用户: wocc 里怎么退出", got)
+        self.assertIn("助手: 输入 :q 退出。", got)
+        self.assertLess(got.index("用户:"), got.index("助手:"), "按时间正序拼接")
+
+    def test_search_block_becomes_last_query(self):
+        block = ('<search_results query="Vercel CLI latest version" count="10">'
+                 + chr(10) + '资料正文不该被重发')
+        messages = [
+            {"role": "user", "content": block},
+            {"role": "assistant", "content": "Vercel CLI 当前版本是 65.3.1"},
+        ]
+        got = self.ctx(messages)
+        self.assertIn("搜索过: Vercel CLI latest version", got)
+        self.assertNotIn("资料正文不该被重发", got)
+
+    def test_limit_and_truncation(self):
+        messages = [{"role": "user", "content": "第%d条" % i + "x" * 500}
+                    for i in range(6)]
+        got = self.ctx(messages, limit=2, chars=20)
+        lines = got.splitlines()
+        self.assertEqual(len(lines), 2, "只取最近几条")
+        for line in lines:
+            self.assertLessEqual(len(line), len("用户: ") + 20)
+
+    def test_skips_other_roles_and_broken_blocks(self):
+        messages = [
+            {"role": "system", "content": "系统提示不该出现"},
+            {"role": "user", "content": '<search_results count="3">没有 query 属性</search_results>'},
+            {"role": "assistant", "content": "ok"},
+        ]
+        got = self.ctx(messages)
+        self.assertNotIn("系统提示不该出现", got)
+        self.assertNotIn("没有 query 属性", got)
+        self.assertIn("助手: ok", got)
+
+    def test_derive_sends_entity_from_context(self):
+        from woc import llm as llm_mod
+
+        seen = {}
+
+        def fake_llm(messages, cfg, on_chunk=None, on_mode=None):
+            seen["payload"] = messages[-1]["content"]
+            return "Vercel CLI next release"
+
+        block = ('<search_results query="Vercel CLI latest version" count="10">'
+                 '资料略</search_results>')
+        messages = [
+            {"role": "user", "content": block},
+            {"role": "assistant", "content": "Vercel CLI 当前版本是 65.3.1（Homebrew）"},
+        ]
+        with mock.patch.object(llm_mod, "call_llm_messages", fake_llm):
+            got = search_mod.derive_query(
+                "when will this software be updated in next?",
+                messages, make_cfg(), "woc")
+        self.assertEqual(got, "Vercel CLI next release")
+        self.assertIn("Vercel", seen["payload"], "上下文里的实体要进折词请求")
+        self.assertIn("搜索过: Vercel CLI latest version", seen["payload"])
+
+    def test_prompt_resolves_back_references(self):
+        flat = " ".join(search_mod.QUERY_PROMPT.split())
+        self.assertIn("concrete name", flat)
+        self.assertIn("Never widen", flat, "不许把具体指代放宽成泛词")
+
+
 if __name__ == "__main__":
     unittest.main()

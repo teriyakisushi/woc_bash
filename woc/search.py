@@ -56,6 +56,10 @@ Rules:
    "please", "can you", "帮我", "我想知道", "到底".
 3. 2-10 words. Do not add quotes or search operators unless they carry meaning.
 4. If the request is already a good query, return it unchanged.
+5. The request may point back at the conversation ("this software", "it",
+   "that project", "它", "这个"). Resolve it to the concrete name, version or
+   error string that appears in the earlier lines, and put that in the query.
+   Never widen a specific referent into a generic word like "software".
 """
 
 # 模型爱写的"query: xxx"前缀。
@@ -136,20 +140,43 @@ def parse_query(text):
     return clean_query(line)
 
 
-def _recent_questions(messages, limit=3, chars=200):
-    """最近几条 user 消息，给"问题很模糊"时当上下文。
+# 搜索结果块的开头：`<search_results query="..." count="...">`。
+# 追问经常围绕上一次搜索的话题，所以从这里把 query 抽出来当上下文，
+# 而不是把整块结果（几千字）重新发一遍。
+_SEARCH_BLOCK_RE = re.compile(r'<search_results\s+query="([^"]*)"')
 
-    跳过搜索结果块（那是资料，不是用户的问题），只取最后几条并各自截断 ——
-    检索词请求不该把整段对话重发一遍。
+
+def _recent_context(messages, limit=4, chars=240):
+    """最近几轮对话的压缩摘要，给"问题很模糊"时当上下文。
+
+    三条规则：
+
+    - 只取 `user` / `assistant`。**只取 user 是不够的** —— 用户一句 `:search ...`
+      之后，紧跟着的 user 消息是搜索结果块，实体名（Vercel CLI、库名、报错串）
+      往往只出现在 assistant 的回答里。
+    - 搜索结果块不重发正文，只把 `query="..."` 抽成一行"搜索过: ..."：追问
+      （"这个软件什么时候更新"）几乎总是延续上一次的检索词。
+    - 每条截断，条数有上限：这是给一次小请求用的提示，不是对话回放。
     """
     picked = []
     for item in reversed(list(messages or [])):
-        if (item or {}).get("role") != "user":
+        item = item or {}
+        role = item.get("role")
+        if role not in ("user", "assistant"):
             continue
         text = " ".join(str(item.get("content") or "").split())
-        if not text or text.startswith("<search_results"):
+        if not text:
             continue
-        picked.append(text[:chars])
+        block = _SEARCH_BLOCK_RE.match(text)
+        if block:
+            # 结果块本身就是"上一次搜了什么"，再加 `用户:` 会变成双重标签。
+            line = "搜索过: " + block.group(1)[:chars]
+        elif text.startswith("<search_results"):
+            continue
+        else:
+            label = "用户" if role == "user" else "助手"
+            line = f"{label}: {text[:chars]}"
+        picked.append(line)
         if len(picked) >= limit:
             break
     return "\n".join(reversed(picked))
@@ -171,7 +198,7 @@ def derive_query(user_input, messages, cfg, alias):
     任何失败都不抛异常：检索词优化是可选增强，不能让它挡住一次真实搜索。
     """
     basis = clean_query(user_input)
-    context = _recent_questions(messages)
+    context = _recent_context(messages)
     if not basis and not context:
         return ""
 
