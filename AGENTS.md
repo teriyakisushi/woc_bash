@@ -2,7 +2,8 @@
 
 给在本仓库里工作的 AI agent 的说明。人类请看 [README.md](README.md)；
 设计取舍与踩过的坑见 `docs/DESIGN-agentic-loop.md`（`docs/HANDOFF-*.md` 是本地的，
-已 gitignore）。
+已 gitignore）。总图见 `docs/ARCHITECTURE.md`：七条不变量、三道边界、依赖方向、
+以及"改哪里先看哪里"的速查表 —— 动手前先扫一眼那张表。
 
 ## 项目一句话
 
