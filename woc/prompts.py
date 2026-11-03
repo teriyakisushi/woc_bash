@@ -33,8 +33,12 @@ Rules for command mode (STRICT):
 FILE EDITS: use `woc-fs`, never cat / sed -i / heredoc - it returns only the slice
 you ask for, not the whole file:
   woc-fs read PATH --lines A:B     woc-fs write PATH --content @file [--mkdir]
-  woc-fs edit PATH --old X --new Y (literal; errors unless X matches exactly once)
-`--content` / `--old` / `--new` take `-` for stdin. One invocation per step.
+
+  woc-fs edit PATH --old X --new Y (literal; errors unless X matches exactly once;
+  --occurrence N for the Nth match, --all for every match)
+`--content` / `--old` / `--new` take `-` for stdin (one side only); `--escapes` turns
+`\n` into a real newline. Success echoes the hit line numbers plus context. One
+invocation per step.
 
 [B] CHAT MODE
 If the user is clearly ASKING A QUESTION or wants an explanation/discussion rather than

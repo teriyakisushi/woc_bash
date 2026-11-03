@@ -19,9 +19,11 @@ error；输出刻意不加 `[alias]` 日志前缀，否则会污染命令输出�
 
     woc-fs read  PATH [--lines 40:80] [--head N] [--tail N] [--max-chars N] [--raw]
     woc-fs write PATH [--content TEXT] [--mkdir] [--backup] [--append] [--dry-run]
-    woc-fs edit  PATH --old OLD [--new NEW] [--all] [--backup] [--dry-run]
+    woc-fs edit  PATH --old OLD [--new NEW] [--all|--occurrence N] [--backup] [--dry-run]
 
-内容参数支持 `@file`（从文件读）与 `-`（从 stdin 读），绕开引号地狱。
+内容参数支持 `@file`（从文件读）与 `-`（从 stdin 读），绕开引号地狱；两者不能
+同时指向 stdin。多行内容要么走 `@file`，要么加 `--escapes` 在命令行里写
+`\n` / `\t` / `\\`。
 退出码：0 成功；1 失败（stderr 一行 error）；2 参数错误（argparse）。
 """
 
@@ -36,6 +38,9 @@ PROG = "woc-fs"
 DEFAULT_HEAD = 60
 DEFAULT_MAX_CHARS = 20000
 BINARY_SNIFF = 8192
+# edit 成功后回显改动处：上下各 3 行，最多 12 行（模型靠这段确认自己改对了）。
+CONTEXT_RADIUS = 3
+MAX_CONTEXT_LINES = 12
 # os.replace 失败时允许退化成原地写的 errno：9p(ENOTSUP)、跨设备(EXDEV)，
 # 某些 FUSE / SMB 挂载报 EPERM。
 _FALLBACK_ERRNOS = (errno.EXDEV, errno.EPERM, getattr(errno, "ENOTSUP", -1))
@@ -82,19 +87,64 @@ def read_text(path):
     return raw.decode("utf-8", "replace")
 
 
+def _is_file_spec(spec):
+    """`@file` / `-` 是内容来源，里面的反斜杠是原文，不做转义展开。"""
+    return spec == "-" or spec.startswith("@")
+
+
+def _unescape(text):
+    r"""把命令行里的 `\n` / `\t` / `\\` 展开（只在显式 --escapes 时调用）。"""
+    out = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            nxt = text[index + 1]
+            if nxt == "n":
+                out.append("\n")
+                index += 2
+                continue
+            if nxt == "t":
+                out.append("\t")
+                index += 2
+                continue
+            if nxt == "\\":
+                out.append("\\")
+                index += 2
+                continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
 # ---------- 写 ----------
+def _backup_path(path):
+    """备份名单调递增，永不覆盖：PATH.bak / PATH.bak.1 / PATH.bak.2 …"""
+    if not os.path.exists(path + ".bak"):
+        return path + ".bak"
+    index = 1
+    while os.path.exists(f"{path}.bak.{index}"):
+        index += 1
+    return f"{path}.bak.{index}"
+
+
 def atomic_write(path, text, backup=False, dry_run=False):
-    """临时文件 + os.replace；保留 mode；可备份 <path>.bak。返回文件是否已存在。"""
+    """临时文件 + os.replace；保留 mode；备份到不重名的 `<path>.bak[.N]`。
+
+    返回 (文件是否已存在, 备份路径)；没备份时备份路径是空串。
+    """
     existed = os.path.exists(path)
     if dry_run:
-        return existed
+        return existed, ""
 
+    saved = ""
     if backup and existed:
+        saved = _backup_path(path)
         try:
-            with open(path, "rb") as src, open(path + ".bak", "wb") as dst:
+            with open(path, "rb") as src, open(saved, "wb") as dst:
                 dst.write(src.read())
         except OSError as exc:
-            raise Failure(f"{path}.bak: {exc.strerror or exc}")
+            raise Failure(f"{saved}: {exc.strerror or exc}")
 
     directory = os.path.dirname(os.path.abspath(path)) or "."
     try:
@@ -126,7 +176,7 @@ def atomic_write(path, text, backup=False, dry_run=False):
     finally:
         if tmp and os.path.exists(tmp):
             os.unlink(tmp)
-    return existed
+    return existed, saved
 
 
 def count_lines(text):
@@ -177,6 +227,8 @@ def cmd_read(args):
 
 def cmd_write(args):
     text = load_text(args.content) if args.content is not None else read_stdin()
+    if args.escapes and args.content is not None and not _is_file_spec(args.content):
+        text = _unescape(text)
     directory = os.path.dirname(os.path.abspath(args.path)) or "."
 
     if args.append:
@@ -197,9 +249,11 @@ def cmd_write(args):
 
     if not args.mkdir and not os.path.isdir(directory):
         raise Failure(f"{directory}: no such directory（加 --mkdir 创建）")
-    atomic_write(args.path, text, backup=args.backup, dry_run=args.dry_run)
+    _existed, saved = atomic_write(args.path, text, backup=args.backup,
+                                   dry_run=args.dry_run)
     verb = "would write" if args.dry_run else "wrote"
-    print(f"{args.path}: {verb} {len(text)} chars, {count_lines(text)} lines")
+    note = f"（备份 {saved}）" if saved else ""
+    print(f"{args.path}: {verb} {len(text)} chars, {count_lines(text)} lines{note}")
 
 
 def _closest_line(text, old):
@@ -219,9 +273,55 @@ def _closest_line(text, old):
     return f"（最接近的是第 {index + 1} 行: {snippet}）"
 
 
+def _line_of(text, offset):
+    """offset 落在第几行（1 基）。"""
+    return text.count("\n", 0, offset) + 1
+
+
+def _context_rows(text, first, added):
+    """改动处 ±CONTEXT_RADIUS 行，带行号；改动行前缀 `> `，其余 `  `。"""
+    lines = text.splitlines(keepends=True)
+    total = len(lines)
+    last = first + max(added, 1) - 1
+    lo = max(1, first - CONTEXT_RADIUS)
+    hi = min(total, last + CONTEXT_RADIUS)
+    if hi - lo + 1 > MAX_CONTEXT_LINES:
+        hi = lo + MAX_CONTEXT_LINES - 1
+    width = max(4, len(str(total)))
+    marked = set(range(first, min(last, total) + 1))
+    rows = []
+    for index in range(lo - 1, hi):
+        flag = "> " if index + 1 in marked else "  "
+        rows.append(f"{flag}{index + 1:>{width}}| "
+                    f"{lines[index].rstrip(chr(13) + chr(10))}")
+    return rows
+
+
+def _spots_text(text, positions):
+    """命中位置 -> `line 7` / `lines 3, 9, 12`。"""
+    numbers = [str(_line_of(text, offset)) for offset in positions]
+    if len(numbers) == 1:
+        return f"line {numbers[0]}"
+    shown = ", ".join(numbers[:5])
+    if len(numbers) > 5:
+        shown += " ..."
+    return f"lines {shown}"
+
+
 def cmd_edit(args):
+    if args.all and args.occurrence is not None:
+        raise Failure("--all 和 --occurrence 只能选一个")
+    if args.old == "-" and args.new == "-":
+        raise Failure("--old 和 --new 不能同时用 -（stdin 只读得了一次）；"
+                      "改用 @file，或让其中一个走命令行")
+
     old = load_text(args.old)
     new = "" if args.new is None else load_text(args.new)
+    if args.escapes:
+        if not _is_file_spec(args.old):
+            old = _unescape(old)
+        if args.new is not None and not _is_file_spec(args.new):
+            new = _unescape(new)
     if not old:
         raise Failure("--old 是空的，没什么可替换")
 
@@ -229,7 +329,27 @@ def cmd_edit(args):
     count = text.count(old)
     if count == 0:
         raise Failure(f"--old 在 {args.path} 里没找到{_closest_line(text, old)}")
-    if count > 1 and not args.all:
+
+    if args.occurrence is not None:
+        if not 1 <= args.occurrence <= count:
+            raise Failure(f"--occurrence {args.occurrence} 越界："
+                          f"--old 在 {args.path} 里命中 {count} 处")
+        position = -1
+        for _ in range(args.occurrence):
+            position = text.find(old, position + 1)
+        positions = [position]
+        updated = text[:position] + new + text[position + len(old):]
+    elif args.all:
+        positions = []
+        start = 0
+        while True:
+            found = text.find(old, start)
+            if found < 0:
+                break
+            positions.append(found)
+            start = found + 1
+        updated = text.replace(old, new)
+    elif count > 1:
         spots = []
         start = 0
         while len(spots) < 5:
@@ -240,17 +360,25 @@ def cmd_edit(args):
             start = found + 1
         more = " ..." if count > len(spots) else ""
         raise Failure(f"--old 在 {args.path} 命中 {count} 处"
-                      f"（行 {', '.join(spots)}{more}）；用 --all，或把 --old 写长一点")
+                      f"（行 {', '.join(spots)}{more}）；"
+                      f"用 --all 全换，或 --occurrence N 只换第 N 处")
+    else:
+        position = text.find(old)
+        positions = [position]
+        updated = text.replace(old, new, 1)
 
-    updated = text.replace(old, new) if args.all else text.replace(old, new, 1)
     atomic_write(args.path, updated, backup=args.backup, dry_run=args.dry_run)
-    replaced = count if args.all else 1
     verb = "would replace" if args.dry_run else "replaced"
-    print(f"{args.path}: {verb} {replaced} place(s), "
+    print(f"{args.path}: {verb} {len(positions)} place(s) at "
+          f"{_spots_text(text, positions)}, "
           f"{count_lines(text)} -> {count_lines(updated)} lines")
+    if len(positions) == 1:
+        first = _line_of(updated, positions[0])
+        for row in _context_rows(updated, first, count_lines(new)):
+            print(row)
 
 
-# ---------- CLI ----------
+
 def build_parser(prog=PROG):
     parser = argparse.ArgumentParser(
         prog=prog,
@@ -274,17 +402,25 @@ def build_parser(prog=PROG):
     write.add_argument("path")
     write.add_argument("--content", help="内容；@file 读文件、- 读 stdin，省略则读 stdin")
     write.add_argument("--mkdir", action="store_true", help="父目录不存在就创建")
-    write.add_argument("--backup", action="store_true", help="先备份为 <path>.bak")
+    write.add_argument("--backup", action="store_true",
+                       help="先备份为 <path>.bak（重名时用 .bak.1、.bak.2 …，不覆盖）")
     write.add_argument("--append", action="store_true", help="追加而不是覆盖")
+    write.add_argument("--escapes", action="store_true",
+                       help=r"展开 --content 里的 \n \t \\（@file 与 stdin 不展开）")
     write.add_argument("--dry-run", action="store_true", dest="dry_run",
                        help="只报摘要不落盘")
 
-    edit = sub.add_parser("edit", help="字面量替换，要求唯一匹配")
+    edit = sub.add_parser("edit", help="字面量替换（默认要求唯一匹配）")
     edit.add_argument("path")
     edit.add_argument("--old", required=True, help="被替换的原文；@file / - 同样可用")
     edit.add_argument("--new", help="替换成什么，省略表示删除")
     edit.add_argument("--all", action="store_true", help="命中多处时全部替换")
-    edit.add_argument("--backup", action="store_true", help="先备份为 <path>.bak")
+    edit.add_argument("--backup", action="store_true",
+                      help="先备份为 <path>.bak（重名时用 .bak.1、.bak.2 …，不覆盖）")
+    edit.add_argument("--occurrence", type=int, metavar="N",
+                      help="只替换第 N 处命中（1 基），不再要求唯一匹配")
+    edit.add_argument("--escapes", action="store_true",
+                      help=r"展开 --old / --new 里的 \n \t \\（@file 与 stdin 不展开）")
     edit.add_argument("--dry-run", action="store_true", dest="dry_run",
                       help="只报摘要不落盘")
     return parser

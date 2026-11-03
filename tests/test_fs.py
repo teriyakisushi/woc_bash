@@ -157,6 +157,30 @@ class WriteTest(FsCase):
         self.assertEqual(path.read_text(encoding="utf-8"), "one\ntwo\n")
 
 
+class WriteTestBackupTest(FsCase):
+    def test_second_backup_does_not_overwrite_the_first(self):
+        path = self.make("a.txt", "v1\n")
+        self.run_fs("write", str(path), "--content", "v2\n", "--backup")
+        self.run_fs("write", str(path), "--content", "v3\n", "--backup")
+        self.assertEqual((self.root / "a.txt.bak").read_text(encoding="utf-8"), "v1\n")
+        self.assertEqual((self.root / "a.txt.bak.1").read_text(encoding="utf-8"),
+                         "v2\n")
+        self.assertEqual(path.read_text(encoding="utf-8"), "v3\n")
+
+    def test_backup_path_is_reported(self):
+        path = self.make("a.txt", "old\n")
+        _code, out, _err = self.run_fs("write", str(path), "--content", "new\n",
+                                       "--backup")
+        self.assertIn("a.txt.bak", out)
+
+    def test_escapes_expand_newlines_in_content(self):
+        path = self.root / "a.txt"
+        code, _out, err = self.run_fs("write", str(path), "--content", r"a\nb\n",
+                                      "--escapes")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(path.read_text(encoding="utf-8"), "a\nb\n")
+
+
 class EditTest(FsCase):
     def test_unique_replacement(self):
         path = self.make("a.py", "a = 1\nb = 2\nc = 3\n")
@@ -225,6 +249,69 @@ class EditTest(FsCase):
         code, _out, err = self.run_fs("edit", str(path), "--old", "")
         self.assertEqual(code, 1)
         self.assertIn("--old 是空的", err)
+
+
+    def test_success_reports_line_and_context(self):
+        path = self.make("a.py", "a = 1\nb = 2\nc = 3\n")
+        code, out, err = self.run_fs("edit", str(path), "--old", "b = 2",
+                                     "--new", "b = 20")
+        self.assertEqual(code, 0, err)
+        self.assertIn("at line 2", out.splitlines()[0])
+        self.assertIn(">    2| b = 20", out)
+
+    def test_context_block_is_capped(self):
+        path = self.make("a.txt", "".join(f"l{i}\n" for i in range(1, 41)))
+        code, out, err = self.run_fs("edit", str(path), "--old", "l20",
+                                     "--new", "L20")
+        self.assertEqual(code, 0, err)
+        self.assertLessEqual(len(out.splitlines()), 1 + 12)
+        self.assertIn(">   20| L20", out)
+
+    def test_occurrence_picks_the_nth_match(self):
+        path = self.make("a.txt", "x\nx\nx\n")
+        code, out, err = self.run_fs("edit", str(path), "--old", "x", "--new", "y",
+                                     "--occurrence", "2")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(path.read_text(encoding="utf-8"), "x\ny\nx\n")
+        self.assertIn("at line 2", out)
+
+    def test_occurrence_out_of_range(self):
+        path = self.make("a.txt", "x\nx\n")
+        code, _out, err = self.run_fs("edit", str(path), "--old", "x", "--new", "y",
+                                      "--occurrence", "3")
+        self.assertEqual(code, 1)
+        self.assertIn("越界", err)
+        self.assertEqual(path.read_text(encoding="utf-8"), "x\nx\n")
+
+    def test_occurrence_and_all_conflict(self):
+        path = self.make("a.txt", "x\n")
+        code, _out, err = self.run_fs("edit", str(path), "--old", "x", "--new", "y",
+                                      "--all", "--occurrence", "1")
+        self.assertEqual(code, 1)
+        self.assertIn("只能选一个", err)
+
+    def test_stdin_for_both_sides_is_refused(self):
+        path = self.make("a.txt", "x\n")
+        code, _out, err = self.run_fs("edit", str(path), "--old", "-", "--new", "-",
+                                      stdin="x")
+        self.assertEqual(code, 1)
+        self.assertIn("stdin", err)
+        self.assertEqual(path.read_text(encoding="utf-8"), "x\n")
+
+    def test_escapes_expand_newlines(self):
+        path = self.make("a.txt", "a\nb\n")
+        code, _out, err = self.run_fs("edit", str(path), "--old", r"a\nb",
+                                      "--new", r"c\nd", "--escapes")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(path.read_text(encoding="utf-8"), "c\nd\n")
+
+    def test_escapes_off_by_default(self):
+        path = self.make("a.txt", "a\nb\n")
+        code, _out, err = self.run_fs("edit", str(path), "--old", r"a\nb",
+                                      "--new", "z")
+        self.assertEqual(code, 1)
+        self.assertIn("没找到", err)
+        self.assertEqual(path.read_text(encoding="utf-8"), "a\nb\n")
 
 
 class InstallerNameTest(unittest.TestCase):

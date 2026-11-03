@@ -31,17 +31,34 @@ woc-fs read PATH --lines 40:80
 woc-fs write PATH --content @/tmp/patch.txt --mkdir --backup
 ```
 
-字面量替换：`--old` 必须在文件里**只出现一次**，否则直接报错并告诉你命中几处、在哪几行。
+字面量替换：`--old` 默认必须在文件里**只出现一次**，否则直接报错并告诉你命中几处、在哪几行；
+要改重复文本里的某一处就加 `--occurrence N`（第 N 个命中，1 基），全改就 `--all`。
+改成功后命令会回显改动处的行号与上下文，改动行前缀是 `> `，不用再 `read` 一遍确认。
 
 ```bash
 woc-fs edit PATH --old 'return None' --new 'return []' --backup
+```
+
+# 多行内容
+
+命令行走单行，多行内容别硬塞引号：加 `--escapes`，把换行写成 `\n`（`\t` 也认，
+`\\` 表示反斜杠本身）。
+
+```bash
+woc-fs edit PATH --old 'if a:\n    b\n' --new 'if a:\n    b = 1\n' --escapes
+```
+
+十几行以上的整块，先落成临时文件再 `@` 进去：
+
+```bash
+woc-fs edit PATH --old @/tmp/woc-old.txt --new @/tmp/woc-new.txt
 ```
 
 # 约定
 
 - 先 `read` 再 `edit`：没看到原文就猜 `--old`，十次有八次是"没找到"。
 - `--old` 写长一点更安全：带上前后文和缩进，比 `x = 1` 这种短串稳。
-- 改之前加 `--backup`，万一改错还能从 `PATH.bak` 拿回来。
+- 改之前加 `--backup`：备份不会互相覆盖（`PATH.bak`、`PATH.bak.1`…），摘要里会写明落到哪个文件。
 - 拿不准时先跑 `--dry-run`：只报摘要不落盘。
 - 退出码 0 成功、1 失败、2 参数错；失败时 stderr 只有一行 `error: …`，照那行改。
 
