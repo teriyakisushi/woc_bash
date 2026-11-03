@@ -41,6 +41,8 @@ python3 compile.py --key sk-xxxx
 
 安装器默认把命令放到 `~/bin`，并尝试将该目录加入当前 Shell 的配置文件。
 安装时会询问日志别名和三个命令名（直接回车用默认值，见下面的 `[prefix]`）。
+同时会装一个文件读写命令 `<woc 命令名>-fs`（默认 `woc-fs`）：名字从 `woc_prefix`
+派生，不额外占一个配置键。
 也可以跳过 API Key 配置，稍后手动设置：
 
 ```bash
@@ -554,6 +556,27 @@ enabled = true
 
 对应环境变量 `WOC_PIPE=0` / `WOC_PIPE_MAX_CHARS=...`。
 
+### 文件读写（`woc-fs`）
+
+`woc-fs` 是给模型（也给人）用的文件读写命令：一条命令一个动作，输出只有一行摘要
+加数据，不把整个文件灌进对话。
+
+```bash
+woc-fs read PATH --lines 40:80                 # 带行号读一段，默认前 60 行
+woc-fs read PATH --tail 20                     # 最后 20 行
+woc-fs write PATH --content @/tmp/new.py --mkdir --backup
+woc-fs edit PATH --old 'return None' --new 'return []' --backup
+```
+
+- `read` 拒绝二进制文件，超过 20000 字符自动截断并附一句提示。
+- `write` 先写临时文件再 `os.replace`，保留原文件权限位；`--dry-run` 只报摘要不落盘。
+- `edit` 只做字面量替换，`--old` 命中 0 处或 2 处以上都直接报错，并告诉你命中在哪几行。
+- 内容参数支持 `@file`（从文件读）与 `-`（从 stdin 读），绕开引号地狱。
+- 退出码 0 成功 / 1 失败 / 2 参数错误；失败时 stderr 只有一行 `error: …`。
+
+它和普通命令一样过危险检查与人工确认：**不进只读白名单**，`auto_safe` 不会把它
+免确认。模型该在什么时候用它，写在 `.woc/templates/file-ops.md` 里。
+
 ### 多轮会话
 
 ```bash
@@ -701,7 +724,7 @@ source <(woc --completion zsh)
 ```
 
 想长期生效，把这一行加进 `~/.bashrc` / `~/.zshrc`（或把输出重定向到补全目录）。
-命令名会跟随 `[prefix]` 配置。
+命令名会跟随 `[prefix]` 配置，`<woc_prefix>-fs` 也一起补全。
 
 ## 卸载
 

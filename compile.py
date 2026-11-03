@@ -31,6 +31,11 @@ ENTRY_SCRIPTS = {
     "wocc_prefix": "wocc.py",
     "woc_chat_prefix": "woc_chat.py",
 }
+# 文件读写命令 woc-fs：名字从 woc_prefix 派生（<woc_prefix>-fs），
+# 不额外占一个 [prefix] 配置键，也就不必改 CONFIG_TEMPLATE 的键集合。
+FS_SUFFIX = "-fs"
+FS_SCRIPT = "wocfs.py"
+ALL_SCRIPTS = tuple(ENTRY_SCRIPTS.values()) + (FS_SCRIPT,)
 DEFAULT_SRC = "woc.py"
 PACKAGE_SRC = "woc"
 CONFIG_DIR = Path.home() / ".config" / "woc"
@@ -199,6 +204,7 @@ def _validate_prefix(values: dict, fallback: dict) -> dict:
             continue
         names[key] = value
     commands = [names[key] for key in COMMAND_KEYS]
+    commands.append(names["woc_prefix"] + FS_SUFFIX)  # 派生命名也算在内
     if len(set(commands)) != len(commands):
         print("[compile] ⚠️  woc / wocc / woc_chat 命令名不能重复，已全部回退默认值")
         for key in COMMAND_KEYS:
@@ -352,8 +358,10 @@ def write_prefix_config(names: dict) -> None:
 
 
 def command_names(names: dict) -> list:
-    """[(命令名, 入口脚本), ...]"""
-    return [(names[key], ENTRY_SCRIPTS[key]) for key in COMMAND_KEYS]
+    """[(命令名, 入口脚本), ...]：三条主命令 + 派生的 <woc_prefix>-fs。"""
+    pairs = [(names[key], ENTRY_SCRIPTS[key]) for key in COMMAND_KEYS]
+    pairs.append((names["woc_prefix"] + FS_SUFFIX, FS_SCRIPT))
+    return pairs
 
 
 # ---------- 语法检查 ----------
@@ -659,7 +667,7 @@ def do_install(args) -> None:
     log(f"安装目录: {target_dir}")
 
     check_syntax(src)
-    for script in ENTRY_SCRIPTS.values():
+    for script in ALL_SCRIPTS:
         check_syntax(src.parent / script)
     install_binary(src, target_dir, names)
 
@@ -694,13 +702,16 @@ def do_install(args) -> None:
     log("然后试试：")
     print(f'    {names["woc_prefix"]}  查看当前目录下最大的 10 个文件')
     print(f'    {names["wocc_prefix"]} 帮我看看当前运行中的进程')
+    print(f'    {names["woc_prefix"]}{FS_SUFFIX} read PATH --lines 1:40   看文件片段')
 
 
 def do_uninstall(args) -> None:
     target_dir = Path(args.prefix).expanduser().resolve()
     names = current_prefix()
     targets = {names[key] for key in COMMAND_KEYS}
-    targets.update({"woc", "wocc", "woc_chat"})  # 旧版本安装的默认命令名
+    targets.add(names["woc_prefix"] + FS_SUFFIX)
+    # 旧版本安装的默认命令名
+    targets.update({"woc", "wocc", "woc_chat", "woc-fs"})
 
     for cmd_name in sorted(targets):
         bin_path = target_dir / cmd_name

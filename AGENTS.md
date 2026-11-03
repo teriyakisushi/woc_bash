@@ -69,6 +69,7 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 | `woc/debug.py` | `WOC_DEBUG=1` 观测：usage、前缀、输入规模、loop 步（只写 stderr） |
 | `woc/config.py` | 分段配置 + 环境变量优先 |
 | `woc/colors.py` | 自绘行编辑器 + 彩色输出（**改动风险最高**） |
+| `woc/fs.py` | `woc-fs`：文件读写 `read` / `write` / `edit`（独立命令，不进 loop） |
 | `compile.py` | 安装器（命令改名、全局模板、卸载） |
 
 ## 代码风格

@@ -26,6 +26,17 @@ class RenderTest(unittest.TestCase):
         self.assertTrue(script.startswith("#compdef woc wocc woc_chat"))
         self.assertIn("compdef _woc_complete", script)
 
+    def test_fs_name_follows_prefix(self):
+        script = render("bash", NAMES)
+        self.assertIn("complete -F _woc_complete woc wocc woc_chat woc-fs", script)
+        self.assertIn("woc-fs)", script)
+        self.assertIn("--lines", script)
+
+    def test_fs_name_derived_from_custom_prefix(self):
+        script = render("bash", ["wc", "wcc", "wcchat"])
+        self.assertIn("complete -F _woc_complete wc wcc wcchat wc-fs", script)
+        self.assertIn("wc-fs)", script)
+
     def test_unknown_shell(self):
         with self.assertRaises(ValueError):
             render("fish", NAMES)

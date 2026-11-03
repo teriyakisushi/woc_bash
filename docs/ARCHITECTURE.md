@@ -155,6 +155,7 @@ woc/*        ──✕── cli/*                     （下层不许反向依�
 sanitize.py / gate.py  纯函数，不做 IO       （谁都能调，且必须好测）
 exec.py      只执行，不做判定                  （判定在 gate，别把策略塞进执行层）
 config / colors / debug   无上行依赖，最底层
+fs.py        纯 IO，只被 woc-fs 调用        （独立命令，不参与 loop 与判定）
 ```
 
 三条推论：
@@ -190,7 +191,7 @@ secret|token|api_key` 六个字段名匹配，**已知漏配**（`SECRET_KEY=`�
 
 ## 9. 测试地图（改哪里，先跑哪一组）
 
-全部离线，`python3 -m unittest discover -s tests`（260 个用例，约 0.3 s，1 个 live skip）。
+全部离线，`python3 -m unittest discover -s tests`（290+ 个用例，约 0.3 s，1 个 live skip）。
 `WOC_LIVE_TEST=1` 才真调 API —— 会有费用，默认不跑。
 
 | 文件 | 守住什么 |
@@ -200,7 +201,8 @@ secret|token|api_key` 六个字段名匹配，**已知漏配**（`SECRET_KEY=`�
 | `tests/test_pipe.py` | 管道模式：`detect_format` 只认 diff/json、prompt 不预设日志、二进制拒绝、头尾截断 |
 | `tests/test_search.py` | 搜索：`query_by_llm` 两种来源、`derive_query` 回退、来源行、字符预算、懒加载 |
 | `tests/test_session.py` | 落盘：脱敏、限长、0600/0700、归档裁剪、恢复 |
-| `tests/test_compile.py` | 安装器与配置模板：与 `woc/config.py` 双向比对（少键/多键/值不同都红） |
+| `tests/test_compile.py` | 安装器与配置模板：与 `woc/config.py` 双向比对（少键/多键/值不同都红）；`woc-fs` 的派生命名 |
+| `tests/test_fs.py` | `woc-fs`：行窗口、二进制拒绝、截断、原子写与权限位、0 处/多处匹配、CRLF 保留 |
 | `tests/test_help.py` | 三个入口的 `--help`：flag 齐全、`[prefix]` 生效、无 argv 不走管道 |
 | `tests/test_cli_guard.py` | 非终端输入不得当确认：`woc` 走管道、`wocc`/`woc -c` 拒绝启动 |
 | `tests/test_chat_stream.py` / `tests/test_markdown.py` | SSE 增量、流式渲染、代码块与表格 |
@@ -230,6 +232,7 @@ python3 -m unittest discover -s tests
 | 加配置项 | `woc/config.py` 对应小节 | `compile.py` 的 `CONFIG_TEMPLATE`、`docs/CONFIG.md`；`tests/test_compile.py` 会比对两处 |
 | 改输出渲染 | `woc/markdown.py`、`woc/colors.py`（**风险最高**） | `tests/test_markdown.py` / `tests/test_chat_stream.py`；别在流式路径上做整段缓冲 |
 | 改安装器 | `compile.py` | `tests/test_compile.py`；`~/bin/lib/woc` 是拷贝，改完要重跑 `python3 compile.py` |
+| 改文件读写命令 | `woc/fs.py`（read / write / edit） | `tests/test_fs.py`；`.woc/templates/file-ops.md` 的用法；`compile.py` 的 `FS_SUFFIX` / `FS_SCRIPT` |
 
 ---
 
