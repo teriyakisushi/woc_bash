@@ -12,3 +12,19 @@ woc
 .vscode/
 .idea/
 *.swp
+
+# 本地调研与交接文档（不入库）
+HANDOFF*.md
+docs/COMPETITORS*.md
+docs/DESIGN-review.md
+docs/DESIGN-trust-valve.md
+
+# 工具/编辑器留下的临时副本
+*dsh-ops-*
+
+# 从 Windows 拷过来的文件偶尔会带着 NTFS 备用数据流的影子文件
+*:Zone.Identifier
+
+# 本地调研与多智能体协作产物（不进版本库）
+_research/
+.agent-teams/

@@ -1,56 +1,132 @@
-import os
 import sys
 
-from ..colors import C, cerr, cout, eprint, interactive_input
-from ..config import capture_sudo, load_config, ls_on_start, prefix
+from .. import session
+from ..colors import C, cerr, eprint, interactive_input
+from ..config import (capture_sudo, load_config, ls_on_start, prefix,
+                      session_settings)
 from ..context import messages_prefix
-from ..exec import (format_exec_result, format_foreground_result,
-                    needs_privilege, pty_capture_available,
-                    run_command_capture, run_command_capture_pty,
-                    run_command_foreground, sudo_ticket_valid)
-from ..llm import LLMError, StreamMode, call_llm_messages
-from ..prompts import MULTI_TURN_HINT, render_system_prompt
-from ..sanitize import (ChatResponse, CommandGenError, clean_text, is_dangerous,
-                        is_root_shell, sanitize)
+from ..llm import LLMError
+from ..loop import (SessionEnd, explain_last, expand_last_output,
+                    export_last, last_command, max_steps_for,
+                    rerun_last, restore_last, run_turn, show_steps)
+from ..prompts import LOOP_HINT, MULTI_TURN_HINT, render_system_prompt
+
+HELP_LINES = (
+    (":q / exit / quit", "结束会话"),
+    (":more / v", "展开上一条命令的完整输出"),
+    (":last", "重看上一条命令"),
+    (":steps", "本回合的步骤审计"),
+    (":explain", "解释上一条命令与输出（只发一次请求，不进历史）"),
+    (":again", "重跑上一条命令（仍需确认）"),
+    (":search [关键词]", "搜索网页并让模型据结果回答（留空按对话推断检索词）"),
+    (":help", "显示这段帮助"),
+)
+
+
+def show_help(alias):
+    eprint(f"[{alias}] 会话内命令：", C.GREEN, C.BOLD)
+    for command, desc in HELP_LINES:
+        eprint(f"  {command:<16} {desc}", C.GRAY)
+
+
+
+
+def show_sessions(alias, command_name):
+    """列出最近保存的会话（`--sessions`）。"""
+    items = session.list_sessions()
+    if not items:
+        eprint(f"[{alias}] 还没有保存过会话"
+               "（[session] persist 开启后每回合自动保存）", C.YELLOW)
+        return
+    eprint(f"[{alias}] 已保存的会话（最近 {len(items)} 个）：",
+           C.GREEN, C.BOLD)
+    for item in items:
+        eprint(f"  {item['saved_at']}  {item['count']:>3} 条  {item['name']}",
+               C.GRAY)
+        eprint(f"      {item['cwd']}", C.GRAY)
+    eprint(f"[{alias}] 恢复：{command_name} --resume <会话名>"
+           f"   或   {command_name} --last-session", C.GREEN)
+
 
 def wocc_main(argv):
     argv = list(argv)
     capture_flag = "--capture-sudo" in argv
-    if capture_flag:
-        argv = [item for item in argv if item != "--capture-sudo"]
+    loop_flag = "--loop" in argv
+    resume_flag = "--last-session" in argv
+    list_flag = "--sessions" in argv
+    resume_name = None
+    if "--resume" in argv:
+        index = argv.index("--resume")
+        resume_name = argv[index + 1] if index + 1 < len(argv) else ""
+    flags = {"--capture-sudo", "--loop", "--last-session",
+             "--sessions", "--resume"}
+    argv = [item for item in argv
+            if item not in flags and item != resume_name]
 
     cfg = load_config()
     name = prefix(cfg, "wocc_prefix")
     alias = prefix(cfg, "alias")
     capture = capture_flag or capture_sudo(cfg)
+    if list_flag:
+        show_sessions(alias, name)
+        sys.exit(0)
+    if resume_name == "":
+        eprint(f"[{alias}] --resume 需要一个会话名；"
+               f"先用 {name} --sessions 查看", C.RED)
+        sys.exit(2)
+    settings = cfg.get("loop") or {}
+    loop_enabled = loop_flag or bool(settings.get("enabled"))
+    max_steps = max_steps_for(cfg, loop_enabled)
+    auto_safe = bool(settings.get("auto_safe"))
+    store = session_settings(cfg)
 
     if argv and argv[0] in ("-h", "--help"):
-        print(f"用法: {name} [首轮自然语言描述]")
-        print("进入交互式多轮会话，每轮命令的执行结果会自动反馈给 LLM。")
-        print("输入 :q / exit / quit 退出。")
-        print("提问（如“解释一下”“为什么...”）会自动进入 chat 模式，不会被执行。")
-        print("  --capture-sudo  需要 sudo 密码时捕获输出并反馈给模型")
+        from .help import multi_help       # 延迟导入：正常路径不加载帮助文案
+        multi_help(name, cfg, alias)
         sys.exit(0)
 
     if not sys.stdin.isatty():
-        # 非终端时 interactive_input 会退化成 input()，任意一行都算“确认”。
+        # 非终端时 read_key() 会退化成 input()，管道里的任意一行都会变成“确认”。
         eprint(f"[{alias}] {name} 需要终端：当前标准输入不是终端，"
                "无法逐条确认命令，已退出。", C.RED)
+        eprint(f"[{alias}] 想把命令输出当数据提问，用: <命令> | "
+               f"{prefix(cfg, 'woc_prefix')} \"你的问题\"", C.GREEN)
         sys.exit(2)
 
-    # 会话级稳定前缀：system prompt + 多轮说明 + template 参考库 + 环境。
+    # 会话级稳定前缀：system prompt + 多轮说明（+loop 说明） + template 参考库 + 环境。
     # 只在开始时构造一次，因此每轮请求的前缀逐字节相同 —— 前缀缓存能持续命中。
-    # 目录快照也只在启动时生成一次，随后作为前缀的一部分复用，不重复执行 ls。
+    hint = MULTI_TURN_HINT + "\n" + LOOP_HINT if loop_enabled else MULTI_TURN_HINT
     messages = messages_prefix(
         multi_turn=True,
         system_prompt=render_system_prompt(alias),
-        multi_turn_hint=MULTI_TURN_HINT,
+        multi_turn_hint=hint,
         with_listing=ls_on_start(cfg),
     )
 
-    eprint(f"[{alias}] 已进入多轮会话，输入 :q 退出", C.GREEN, C.BOLD)
+    if resume_flag or resume_name:
+        restored = session.load(store["max_messages"], store["max_chars"],
+                                name=resume_name)
+        if restored:
+            messages.append({"role": "system",
+                             "content": session.context_note(restored)})
+            messages.extend(restored["messages"])
+            restore_last(restored.get("last"))
+            eprint(f"[{alias}] 已恢复上次会话："
+                   f"{len(restored['messages'])} 条消息"
+                   f"（{restored.get('saved_at', '时间未知')}）",
+                   C.GREEN, C.BOLD)
+        else:
+            eprint(f"[{alias}] 没有可恢复的会话"
+                   "（没保存过，或格式不兼容）", C.YELLOW)
+
+    eprint(f"[{alias}] 已进入多轮会话，输入 :q 退出（:help 看会话内命令）",
+           C.GREEN, C.BOLD)
+    if loop_enabled:
+        eprint(f"[{alias}] loop 已开启：最多 {max_steps} 步，"
+               f"只读命令免确认: {'是' if auto_safe else '否'}", C.GREEN)
 
     pending_input = " ".join(argv) if argv else None
+    save_warned = False
 
     while True:
         if pending_input is not None:
@@ -60,7 +136,9 @@ def wocc_main(argv):
         else:
             try:
                 user_input = interactive_input(
-                    cerr("[user] ", C.MAGENTA, C.BOLD)
+                    cerr("[user] ", C.MAGENTA, C.BOLD),
+                    notice=lambda msg: eprint(
+                        f"[{alias}] {msg}", C.YELLOW),
                 ).strip()
             except (KeyboardInterrupt, EOFError):
                 eprint(f"\n[{alias}] 会话结束", C.GREEN)
@@ -71,174 +149,67 @@ def wocc_main(argv):
         if user_input in (":q", "exit", "quit"):
             eprint(f"[{alias}] 会话结束", C.GREEN)
             break
-
-        messages.append({"role": "user", "content": user_input})
-
-        state = {"mode": None}
-
-        def on_mode(mode):
-            state["mode"] = mode
-
-        def on_chunk(text):
-            if state["mode"] == StreamMode.COMMAND:
-                sys.stdout.write(cout(text, C.CYAN, C.BOLD))
+        if user_input in (":help", ":h", "?"):
+            show_help(alias)
+            continue
+        if user_input == ":again":
+            rerun_last(messages, alias=alias, cfg=cfg, capture=capture)
+            continue
+        if user_input in (":more", "v"):
+            if not expand_last_output():
+                eprint(f"[{alias}] 没有可展开的输出", C.YELLOW)
+            continue
+        if user_input == ":steps":
+            show_steps(alias)
+            continue
+        if user_input == ":explain":
+            explain_last(alias, cfg)
+            continue
+        if user_input == ":last":
+            command = last_command()
+            if command:
+                eprint(f"[{alias}] {command}", C.CYAN)
             else:
-                sys.stdout.write(text)
-            sys.stdout.flush()
-
-        # 显式从新行开始，避免 stdout 缓冲或重定向时命令粘在用户输入后面。
-        sys.stdout.write("\n" + cout("[assistant] ", C.GREEN, C.BOLD))
-        sys.stdout.flush()
-        try:
-            raw = call_llm_messages(
-                messages, cfg, on_chunk=on_chunk, on_mode=on_mode
-            )
-        except LLMError as e:
-            eprint(f"[{alias}] LLM 调用失败：{e}", C.RED)
-            eprint(f"[{alias}] 本轮已跳过，可换个说法重试，或 :q 退出", C.YELLOW)
-            messages.pop()
+                eprint(f"[{alias}] 还没有执行过命令", C.YELLOW)
             continue
 
-        # 命令模式：命令已流完，补换行，再打印提示
-        if state["mode"] == StreamMode.COMMAND:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            eprint(f"[{alias}] 按 Enter 执行，输入 s 跳过，Ctrl+C 取消", C.GREEN)
-        elif state["mode"] == StreamMode.CHAT:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-
-        try:
-            cmd = sanitize(raw)
-        except ChatResponse as chat:
-            # 保留 #CHAT: 标记：剥掉后模型会模仿裸正文，后续轮次继续漏标记。
-            messages.append({"role": "assistant", "content": "#CHAT: " + chat.text})
-            continue
-        except CommandGenError as e:
-            eprint(f"[{alias}] {e}", C.RED)
-            messages.append({"role": "assistant", "content": raw})
-            messages.append({
-                "role": "user",
-                "content": (
-                    "<exec_result>\n"
-                    "exit_code: 1\n"
-                    "stdout:\n\n"
-                    f"stderr:\n命令生成失败：{clean_text(str(e))}\n"
-                    "</exec_result>"
-                ),
-            })
-            continue
-
-        messages.append({"role": "assistant", "content": cmd})
-
-        if is_root_shell(cmd):
-            eprint(f"[{alias}] ⚠️  该命令会打开交互式 root shell，已拒绝：",
-                   C.YELLOW, C.BOLD)
-            eprint(f"  {cmd}", C.YELLOW)
-            messages.append({
-                "role": "user",
-                "content": (
-                    "<exec_result>\n"
-                    "exit_code: 126\n"
-                    "stdout:\n\n"
-                    f"stderr:\n命令会打开交互式 root shell，{alias} 无法在其中继续工作；"
-                    "请改成具体的非交互命令。\n"
-                    "</exec_result>"
-                ),
-            })
-            continue
-
-        if is_dangerous(cmd):
-            eprint(f"[{alias}] ⚠️  检测到潜在危险命令，已拒绝：", C.YELLOW, C.BOLD)
-            eprint(f"  {cmd}", C.YELLOW)
-            messages.append({
-                "role": "user",
-                "content": (
-                    "<exec_result>\n"
-                    "exit_code: 126\n"
-                    "stdout:\n\n"
-                    "stderr:\n命令因安全策略被拒绝，请换一种安全写法。\n"
-                    "</exec_result>"
-                ),
-            })
-            continue
-
-        try:
-            ans = interactive_input(prompt="")
-
-        except (KeyboardInterrupt, EOFError):
-            eprint(f"\n[{alias}] 会话结束", C.GREEN)
-            break
-
-        if ans.strip().lower() == "s":
-            eprint(f"[{alias}] 已跳过", C.YELLOW)
-            messages.append({
-                "role": "user",
-                "content": (
-                    "<exec_result>\n"
-                    "exit_code: 130\n"
-                    "stdout:\n\n"
-                    "stderr:\n用户跳过了这条命令。\n"
-                    "</exec_result>"
-                ),
-            })
-            continue
-
-        shown = False
-        if needs_privilege(cmd):
-            if sudo_ticket_valid():
-                out, err, code = run_command_capture(cmd)
-            elif not sys.stdin.isatty():
-                eprint(f"[{alias}] ⚠️  命令需要 sudo 密码，但当前输入不是终端，已拒绝：",
-                       C.YELLOW, C.BOLD)
-                eprint(f"  {cmd}", C.YELLOW)
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "<exec_result>\n"
-                        "exit_code: 126\n"
-                        "stdout:\n\n"
-                        f"stderr:\n需要 sudo 密码，但 {alias} 的输入不是终端。"
-                        "请在终端里直接运行，或先 sudo -v 缓存凭证后重试。\n"
-                        "</exec_result>"
-                    ),
-                })
+        # 人工指定搜索内容：搜到结果就直接接着让模型回答，不再等用户补一句。
+        # 和 `woc -c` 共用 woc/search.py 里的同一份实现。
+        start = len(messages)
+        sources = None
+        words = user_input.split(maxsplit=1)
+        if words and words[0] == ":search":
+            arg = user_input[len(":search"):].strip().lower()
+            if arg in ("on", "off"):
+                # wocc 没有"模型自主搜索"，也就没有开关；明说一句，别去搜 "off"。
+                eprint(f"[{alias}] wocc 只支持人工 :search，没有自主搜索开关", C.YELLOW)
                 continue
-            elif capture and pty_capture_available():
-                eprint(f"[{alias}] 该命令需要 sudo 权限，正在 pty 中执行并捕获输出"
-                       "（输出会反馈给模型）", C.YELLOW, C.BOLD)
-                out, err, code = run_command_capture_pty(cmd)
-                shown = True
-            else:
-                if capture:
-                    eprint(f"[{alias}] ⚠️  找不到 script，无法捕获输出，改为前台执行",
-                           C.YELLOW, C.BOLD)
-                eprint(f"[{alias}] 该命令需要 sudo 权限，将在本终端前台执行"
-                       "（输出不会反馈给模型）", C.YELLOW, C.BOLD)
-                code, ferr = run_command_foreground(cmd)
-                if ferr:
-                    eprint(f"[{alias}] {ferr}", C.RED)
-                messages.append({
-                    "role": "user",
-                    "content": format_foreground_result(code, ferr),
-                })
+            from ..search import search_command      # 延迟导入：默认路径不加载
+            sources = search_command(user_input, messages, cfg, alias)
+            if sources is None:
                 continue
         else:
-            out, err, code = run_command_capture(cmd)
+            messages.append({"role": "user", "content": user_input})
+        try:
+            run_turn(messages, cfg, alias=alias, capture=capture,
+                     loop_enabled=loop_enabled)
+        except SessionEnd:
+            break
+        except LLMError:
+            # run_turn 已经打印过原因；回滚本回合追加的消息，保持上下文干净。
+            del messages[start:]
+            continue
+        if sources:
+            from ..search import print_sources       # 延迟导入：默认路径不加载
+            print_sources(alias, sources)
 
-        if out and not shown:
-            sys.stdout.write(out)
-            if not out.endswith("\n"):
-                sys.stdout.write("\n")
-        if err and not shown:
-            sys.stderr.write(err)
-            if not err.endswith("\n"):
-                sys.stderr.write("\n")
-
-        if code != 0:
-            eprint(f"[{alias}] exit_code={code}", C.RED)
-
-        messages.append({
-            "role": "user",
-            "content": format_exec_result(out, err, code),
-        })
+        # 每回合结束后落盘：崩溃/断线时最多丢一个回合。
+        if store["persist"]:
+            saved = session.save(messages, model=cfg.get("model"),
+                                 max_messages=store["max_messages"],
+                                 max_chars=store["max_chars"],
+                                 last=export_last())
+            if not saved and not save_warned:
+                eprint(f"[{alias}] 会话保存失败：{session.session_path()}",
+                       C.YELLOW)
+                save_warned = True

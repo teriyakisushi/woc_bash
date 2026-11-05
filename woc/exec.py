@@ -58,10 +58,29 @@ def format_foreground_result(code, error=None):
 # ---------- pty 捕获（sudo 需要密码时） ----------
 PTY_CAPTURE_LIMIT = 200_000  # 内部缓冲上限，避免超大输出吃内存
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-# 常见密钥写法：password=...、token: ...、api_key=...
-_SECRET_RE = re.compile(
-    r"(?i)\b(password|passwd|passphrase|secret|token|api[_-]?key)\b"
-    r"(\s*[=:]\s*)(\S+)")
+# 常见密钥写法：password=...、token: ...、api_key=...，以及名字里**带**关键词的
+# 字段（`SECRET_KEY` / `AWS_SECRET_ACCESS_KEY` / `GITHUB_TOKEN` / `DB_PASSWD`）。
+# 旧版用 `\b(password|...)` 精确匹配字段名，`AWS_SECRET_ACCESS_KEY=` 这类整条漏掉。
+_SECRET_WORDS = (
+    "password", "passwd", "passphrase", "secret", "token", "apikey",
+    "api_key", "api-key", "access_key", "accesskey", "private_key",
+    "credential", "authorization", "session_key",
+)
+_SECRET_NAME = r"[A-Za-z_][A-Za-z0-9_.-]{0,63}"
+_SECRET_PAIR_RE = re.compile(
+    r"(?P<name>" + _SECRET_NAME + r")(?P<sep>\s*[=:]\s*)(?P<value>\S{1,4096})")
+
+# `Authorization: Bearer abc` / `-H "token abc"`：值本身是 "Bearer"，真正的密钥
+# 在下一个词里，所以先把整个凭据吃掉。必须排在字段名规则之前。
+_BEARER_RE = re.compile(r"(?i)\b(bearer|basic|digest|token)\s+[A-Za-z0-9._~+/=-]{6,}")
+
+# PEM 私钥整块（`BEGIN RSA PRIVATE KEY` 里的内容同样是密钥）。
+_PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    re.S)
+
+# `systemctl show -p Environment` / `Environment=` 行：值里是一整串 KEY=VALUE。
+_ENVIRONMENT_LINE_RE = re.compile(r"(?im)^(?P<name>Environment)\s*[=:]\s*(?P<value>.+)$")
 
 
 def pty_capture_available():
@@ -89,8 +108,30 @@ def _clean_pty_output(text):
 
 
 def redact_secrets(text):
-    """捕获内容发给模型前，抹掉常见密钥字段的值。"""
-    return _SECRET_RE.sub(r"\1\2***", text)
+    """捕获内容发给模型前，抹掉常见密钥字段的值。
+
+    宁可多抹：字段名里出现关键词就整值替换 —— 漏掉的代价（密钥进 prompt、进会话）
+    远大于多抹一个单词的可读性损失。裸 token（没有字段名）不在覆盖范围内：
+    没有字段名就没有判据，只能靠 `READ_ONLY` 的参数级复核不让它被执行。
+    """
+    if not text:
+        return text
+    text = _PRIVATE_KEY_RE.sub("-----BEGIN PRIVATE KEY-----***-----END PRIVATE KEY-----", text)
+    text = _BEARER_RE.sub(lambda m: m.group(1) + " ***", text)
+
+    def _pair(match):
+        value = match.group("value")
+        # 上面已经处理过 Bearer/Basic，别把占位符再抹一遍。
+        if value in ("***", "Bearer", "Basic", "Digest"):
+            return match.group(0)
+        name = match.group("name")
+        lowered = name.lower()
+        if any(word in lowered for word in _SECRET_WORDS):
+            return name + match.group("sep") + "***"
+        return match.group(0)
+
+    text = _SECRET_PAIR_RE.sub(_pair, text)
+    return _ENVIRONMENT_LINE_RE.sub(lambda m: m.group("name") + "=***", text)
 
 
 def run_command_capture_pty(cmd, max_output=8000):
@@ -143,6 +184,25 @@ def run_command_capture_pty(cmd, max_output=8000):
     if len(text) > max_output:
         text = text[:max_output] + f"\n...[truncated {len(text) - max_output} chars]"
     return text, "(stdout/stderr 已由 pty 合并)", code
+
+
+def syntax_error(cmd):
+    """用 `bash -n` 预检语法：只解析、不执行。语法正确返回 None。"""
+    try:
+        proc = subprocess.run(
+            ["bash", "-n", "-c", cmd],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # 检查本身不可用时不要阻断正常执行。
+        return None
+    if proc.returncode == 0:
+        return None
+    err = proc.stderr.decode("utf-8", "replace").strip()
+    return err or f"bash -n 退出码 {proc.returncode}"
 
 
 # Execution Commands

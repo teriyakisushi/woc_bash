@@ -31,12 +31,85 @@ ENTRY_SCRIPTS = {
     "wocc_prefix": "wocc.py",
     "woc_chat_prefix": "woc_chat.py",
 }
+# 文件读写命令 woc-fs：名字从 woc_prefix 派生（<woc_prefix>-fs），
+# 不额外占一个 [prefix] 配置键，也就不必改 CONFIG_TEMPLATE 的键集合。
+FS_SUFFIX = "-fs"
+FS_SCRIPT = "wocfs.py"
+ALL_SCRIPTS = tuple(ENTRY_SCRIPTS.values()) + (FS_SCRIPT,)
 DEFAULT_SRC = "woc.py"
 PACKAGE_SRC = "woc"
 CONFIG_DIR = Path.home() / ".config" / "woc"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 # 命令名会直接变成可执行文件名，只允许安全字符
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+# 安装时写进 config.toml 的完整模板。只补缺失项：已有的键和值一律不动，
+# 所以老用户升级安装器不会丢配置，新加的配置项也能自动落位。
+# 逐项说明见 docs/CONFIG.md；环境变量优先于这个文件。
+CONFIG_TEMPLATE = """\
+# woc 配置（由 compile.py 生成：只补缺失项，已有配置不会被覆盖）
+# 逐项说明见 docs/CONFIG.md；环境变量优先于这个文件。
+
+api_base = "https://api.deepseek.com"
+api_key  = ""
+model    = "deepseek-flash"
+timeout  = 30
+
+[prefix]
+alias = "woc"
+woc_prefix = "woc"
+wocc_prefix = "wocc"
+woc_chat_prefix = "woc_chat"
+
+[sudo]
+capture_output = false
+
+[context]
+ls_on_start = false
+
+[loop]
+enabled = false
+max_steps = 5
+total_chars = 24000
+auto_safe = false
+
+[exec]
+syntax_check = true
+
+[ui]
+spinner = true
+fold_lines = 25
+
+[thinking]
+enabled = false
+effort = "high"
+
+[pipe]
+enabled = true
+
+[search]
+enabled = true
+query_by_llm = true
+base_url = ""
+count = 5
+max_searches = 1
+max_chars = 6000
+timeout = 10
+
+[budget]
+context_tokens = 64000
+max_output_tokens = 4096
+max_input_chars = 32000
+
+[debug]
+enabled = false
+
+[session]
+persist = true
+max_messages = 40
+max_chars = 60000
+"""
+
 
 # shell 配置块标记，方便幂等追加 / 卸载时删除
 MARK_BEGIN = "# >>> woc initialize >>>"
@@ -74,15 +147,20 @@ _CONFIG_MODULE = None
 
 
 def _config_module():
-    """直接加载 woc/config.py，避免为读配置而导入整个 woc 包。"""
+    """加载仓库里的 woc/config.py。
+
+    config.py 里有 `from . import ...` 的相对导入（budget / debug），
+    所以必须按包模块导入；按单文件加载会直接 ImportError。
+    把仓库根目录插到 sys.path 最前面，保证用的是当前仓库，而不是环境里
+    可能安装过的旧副本。
+    """
     global _CONFIG_MODULE
     if _CONFIG_MODULE is None:
-        import importlib.util
-        path = Path(__file__).resolve().parent / PACKAGE_SRC / "config.py"
-        spec = importlib.util.spec_from_file_location("woc_config", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _CONFIG_MODULE = module
+        import importlib
+        root = str(Path(__file__).resolve().parent)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        _CONFIG_MODULE = importlib.import_module(f"{PACKAGE_SRC}.config")
     return _CONFIG_MODULE
 
 
@@ -126,6 +204,7 @@ def _validate_prefix(values: dict, fallback: dict) -> dict:
             continue
         names[key] = value
     commands = [names[key] for key in COMMAND_KEYS]
+    commands.append(names["woc_prefix"] + FS_SUFFIX)  # 派生命名也算在内
     if len(set(commands)) != len(commands):
         print("[compile] ⚠️  woc / wocc / woc_chat 命令名不能重复，已全部回退默认值")
         for key in COMMAND_KEYS:
@@ -159,6 +238,108 @@ def _drop_section(lines: list, section: str) -> list:
     return kept
 
 
+def _template_sections():
+    """把模板拆成 [(段名, [(key, 原文行)])]；根级段的名字是空字符串。"""
+    blocks = [("", [])]
+    for raw in CONFIG_TEMPLATE.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            blocks.append((line[1:-1].strip().lower(), []))
+        elif "=" in line and not line.startswith("#"):
+            key = line.split("=", 1)[0].strip()
+            if key:
+                blocks[-1][1].append((key, raw))
+    return blocks
+
+
+def _config_present(lines):
+    """文件里已经有哪些段/键：{段名: {key}}，根级段名是空字符串。"""
+    present = {"": set()}
+    section = ""
+    for raw in lines:
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().lower()
+            present.setdefault(section, set())
+        elif "=" in line and not line.startswith("#"):
+            key = line.split("=", 1)[0].strip()
+            if key:
+                present.setdefault(section, set()).add(key)
+    return present
+
+
+def merge_config_text(text):
+    """把模板里缺失的键补进配置文本，返回（新文本，新增键数）。
+
+    缺失的键补在所属段的末尾；整个段都不存在时追加到文件尾部。已有的值和
+    注释一律不动 —— 安装器升级不该改用户手写的配置。
+    """
+    lines = text.splitlines()
+    present = _config_present(lines)
+    blocks = _template_sections()
+    missing = {}
+    for name, entries in blocks:
+        absent = [(key, line) for key, line in entries
+                  if key not in present.get(name, set())]
+        if absent:
+            missing[name] = absent
+
+    out = []
+    added = 0
+    section = ""
+
+    def flush():
+        nonlocal added
+        count = 0
+        for _key, line in missing.pop(section, []):
+            out.append(line)
+            added += 1
+            count += 1
+        return count
+
+    for raw in lines:
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            # 补进去的键要跟下一段之间留一个空行，否则粘在 [section] 上很难看。
+            if flush() and out and out[-1].strip():
+                out.append("")
+            section = line[1:-1].strip().lower()
+        out.append(raw)
+    flush()
+
+    for name, entries in blocks:
+        if name == "" or name in present:
+            continue
+        out.append("")
+        out.append(f"[{name}]")
+        for _key, line in entries:
+            out.append(line)
+            added += 1
+
+    body = "\n".join(out).rstrip("\n")
+    return (body + "\n" if body else ""), added
+
+
+def merge_config_template(path=None):
+    """把缺失的配置项补进 config.toml；返回新增键数（-1 表示新建了文件）。
+
+    这是 `[search]` / `[thinking]` 这类新配置项落到老用户机器上的唯一路径：
+    装一次就有，不用回 README 手抄。
+    """
+    path = Path(path) if path else CONFIG_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+        path.chmod(0o600)
+        return -1
+    original = path.read_text(encoding="utf-8")
+    merged, added = merge_config_text(original)
+    if merged != original:
+        path.write_text(merged, encoding="utf-8")
+        path.chmod(0o600)
+    return added
+
+
 def write_prefix_config(names: dict) -> None:
     """把 [prefix] 写进 config.toml，保留文件里的其它段落。"""
     path = CONFIG_FILE
@@ -177,8 +358,10 @@ def write_prefix_config(names: dict) -> None:
 
 
 def command_names(names: dict) -> list:
-    """[(命令名, 入口脚本), ...]"""
-    return [(names[key], ENTRY_SCRIPTS[key]) for key in COMMAND_KEYS]
+    """[(命令名, 入口脚本), ...]：三条主命令 + 派生的 <woc_prefix>-fs。"""
+    pairs = [(names[key], ENTRY_SCRIPTS[key]) for key in COMMAND_KEYS]
+    pairs.append((names["woc_prefix"] + FS_SUFFIX, FS_SCRIPT))
+    return pairs
 
 
 # ---------- 语法检查 ----------
@@ -461,7 +644,7 @@ def verify(target_dir: Path, rc_files: list[Path], names: dict) -> None:
             )
             found = out.stdout.strip()
         except Exception as e:
-            log(f"验证 {name} 跳过（{e}）")
+            log(f"验证 {cmd_name} 跳过（{e}）")
             found = ""
 
         if found:
@@ -484,7 +667,7 @@ def do_install(args) -> None:
     log(f"安装目录: {target_dir}")
 
     check_syntax(src)
-    for script in ENTRY_SCRIPTS.values():
+    for script in ALL_SCRIPTS:
         check_syntax(src.parent / script)
     install_binary(src, target_dir, names)
 
@@ -498,6 +681,15 @@ def do_install(args) -> None:
     maybe_write_config(args)
     write_prefix_config(names)
 
+    # 配置模板：只补缺失项，已有配置不动（新增配置项靠这里落地）
+    added = merge_config_template()
+    if added < 0:
+        log(f"已写入配置模板: {CONFIG_FILE}（权限 600）")
+    elif added:
+        log(f"已补齐配置模板: {CONFIG_FILE}（新增 {added} 项，已有配置未改动）")
+    else:
+        log(f"配置模板已是最新: {CONFIG_FILE}")
+
     # 验证
     verify(target_dir, rc_files, names)
 
@@ -510,13 +702,16 @@ def do_install(args) -> None:
     log("然后试试：")
     print(f'    {names["woc_prefix"]}  查看当前目录下最大的 10 个文件')
     print(f'    {names["wocc_prefix"]} 帮我看看当前运行中的进程')
+    print(f'    {names["woc_prefix"]}{FS_SUFFIX} read PATH --lines 1:40   看文件片段')
 
 
 def do_uninstall(args) -> None:
     target_dir = Path(args.prefix).expanduser().resolve()
     names = current_prefix()
     targets = {names[key] for key in COMMAND_KEYS}
-    targets.update({"woc", "wocc", "woc_chat"})  # 旧版本安装的默认命令名
+    targets.add(names["woc_prefix"] + FS_SUFFIX)
+    # 旧版本安装的默认命令名
+    targets.update({"woc", "wocc", "woc_chat", "woc-fs"})
 
     for cmd_name in sorted(targets):
         bin_path = target_dir / cmd_name

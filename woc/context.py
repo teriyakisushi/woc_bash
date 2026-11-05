@@ -33,6 +33,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import debug
+
 # 索引层：模板数上限（超过就只保留前 N 个的索引，防极端情况撑爆上下文）
 INDEX_LIMIT = 100
 # 正文层：注入正文的字符预算。模板少时等于全量，多时自动收敛。
@@ -561,10 +563,17 @@ def render_listing(cwd=None, max_lines=LS_MAX_LINES, max_chars=LS_MAX_CHARS):
     ])
 
 
-def render_environment(cwd=None, platform=None, facts=None):
+def detect_user_shell():
+    """用户的交互 shell 名（来自 $SHELL）；拿不到就按 bash 处理。"""
+    raw = os.environ.get("SHELL", "")
+    return os.path.basename(raw.strip()) or "bash"
+
+
+def render_environment(cwd=None, platform=None, facts=None, confirm_hint=True):
     """dynamic 段：只放会变的环境事实，必须排在 stable 段之后。
 
     facts 不传时使用进程内缓存的事实（发行版 / uid / groups / 容器类型）。
+    confirm_hint=False 用于管道模式：那里没有命令执行，也就没有“人工确认”。
     """
     cwd = cwd or os.getcwd()
     if platform is None:
@@ -575,8 +584,14 @@ def render_environment(cwd=None, platform=None, facts=None):
         f"current working directory: {cwd}",
         f"platform: {platform} (shell: bash)",
     ]
+    shell = detect_user_shell()
+    if shell != "bash":
+        lines.append(
+            f"用户的交互 shell 是 {shell}，但命令由 woc 用 bash 执行；"
+            "zsh/fish 专有写法需要改写成 bash 兼容形式。")
     lines.extend(facts if facts is not None else _static_facts())
-    lines.append("用户在终端里，命令执行前会有人工确认。")
+    if confirm_hint:
+        lines.append("用户在终端里，命令执行前会有人工确认。")
     lines.append("</environment>")
     return "\n".join(lines)
 
@@ -594,6 +609,12 @@ def stable_context(query="", cwd=None, templates=None, warn=None, detail=None):
         return ""
     index = select_index(templates)
     bodies, strategy, scores = select_bodies(templates, query=query)
+    if debug.enabled():
+        debug.log(
+            "templates: %d total, strategy=%s, bodies=%d, index=%d chars, body=%d chars"
+            % (len(templates), strategy, len(bodies),
+               len(render_index(index)),
+               sum(len(t.as_unit()) for t in bodies)))
     if detail is not None:
         detail.update(
             total=len(templates),
