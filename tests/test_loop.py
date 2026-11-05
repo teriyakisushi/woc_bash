@@ -16,6 +16,7 @@ import io
 import os
 import sys
 import unittest
+from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -449,3 +450,53 @@ class SpinnerTest(unittest.TestCase):
         spin.start()
         spin.stop()
         self.assertEqual(stream.getvalue(), "")
+
+
+class ShowCommandTest(unittest.TestCase):
+    """确认前的长命令重排：短命令不重复，长命令按词折行并缩进。"""
+
+    @staticmethod
+    def run_show(cmd, columns="80"):
+        with mock.patch.dict(os.environ, {"COLUMNS": columns}):
+            err = io.StringIO()
+            with redirect_stderr(err):
+                L._show_command("woc", cmd)
+        return err.getvalue()
+
+    def test_short_command_is_not_repeated(self):
+        self.assertEqual(self.run_show("ls -l"), "")
+
+    def test_long_command_is_wrapped_with_indent(self):
+        cmd = ("git log --oneline --author=someone --since=2026-01-01 "
+               "--until=2026-06-01 | head -50")
+        text = self.run_show(cmd, columns="40")
+        self.assertIn("完整命令", text)
+        lines = [line for line in text.splitlines() if line.strip()]
+        self.assertGreater(len(lines), 2)
+        for line in lines[1:]:
+            self.assertTrue(line.startswith("  "), line)
+            self.assertLessEqual(len(line), 40)
+        self.assertEqual(text.count("git log"), 1)
+
+
+class ConfirmTest(unittest.TestCase):
+    """确认键只认 Enter/y · n · e；其它键忽略，且只提示一次。"""
+
+    def confirm(self, keys):
+        with mock.patch.object(L, "read_key", side_effect=keys):
+            err = io.StringIO()
+            with redirect_stderr(err):
+                action = L._confirm("woc")
+        return action, err.getvalue()
+
+    def test_enter_runs(self):
+        self.assertEqual(self.confirm([""])[0], "run")
+
+    def test_n_skips_and_e_edits(self):
+        self.assertEqual(self.confirm(["n"])[0], "skip")
+        self.assertEqual(self.confirm(["e"])[0], "edit")
+
+    def test_other_keys_are_ignored_once(self):
+        action, text = self.confirm(["x", "q", "y"])
+        self.assertEqual(action, "run")
+        self.assertEqual(text.count("其它键已忽略"), 1)

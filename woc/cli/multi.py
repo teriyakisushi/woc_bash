@@ -136,7 +136,9 @@ def wocc_main(argv):
         else:
             try:
                 user_input = interactive_input(
-                    cerr("[user] ", C.MAGENTA, C.BOLD)
+                    cerr("[user] ", C.MAGENTA, C.BOLD),
+                    notice=lambda msg: eprint(
+                        f"[{alias}] {msg}", C.YELLOW),
                 ).strip()
             except (KeyboardInterrupt, EOFError):
                 eprint(f"\n[{alias}] 会话结束", C.GREEN)

@@ -40,7 +40,7 @@ python3 woc.py --check-templates                # 模板自检（应 0 error / 0
 WOC_DEBUG=1 python3 woc.py "..."                # 观测 usage/缓存/前缀规模（stderr）
 
 python3 -m compileall -q woc tests              # 语法
-python3 -m unittest discover -s tests           # 离线回归（230+ 个用例，1 个 live skip，~500ms）
+python3 -m unittest discover -s tests           # 离线回归（330+ 个用例，1 个 live skip，~4s；其中 3s 是 pty 编辑器测试）
 WOC_LIVE_TEST=1 python3 -m unittest discover -s tests   # 真调 API，默认跳过，会产生费用
 ```
 
@@ -68,7 +68,7 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 | `woc/session.py` | `wocc` 会话落盘/恢复：只存对话、脱敏、限长、0600 |
 | `woc/debug.py` | `WOC_DEBUG=1` 观测：usage、前缀、输入规模、loop 步（只写 stderr） |
 | `woc/config.py` | 分段配置 + 环境变量优先 |
-| `woc/colors.py` | 自绘行编辑器 + 彩色输出（**改动风险最高**） |
+| `woc/colors.py` | 自绘行编辑器 + 彩色输出（**改动风险最高**）；先跑 `tests/test_colors.py` |
 | `woc/fs.py` | `woc-fs`：文件读写 `read` / `write` / `edit`（独立命令，不进 loop） |
 | `compile.py` | 安装器（命令改名、全局模板、卸载） |
 

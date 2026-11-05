@@ -9,7 +9,9 @@
 
 import re
 import shlex
+import shutil
 import sys
+import textwrap
 import time
 
 from . import debug
@@ -152,20 +154,48 @@ def _limits(cfg, loop_enabled):
             bool(settings.get("auto_safe")))
 
 
+def _show_command(alias, cmd):
+    """命令短就跳过（上一行已经流式打印过），长命令在确认前整条重排一遍。
+
+    终端按列硬折行，会把管道两头的命令拆成两半；这里按词折行并缩进，
+    保证"要执行的到底是什么"在确认这一屏上还能读全。
+    """
+    columns = shutil.get_terminal_size((80, 24)).columns
+    width = max(40, columns - 4)
+    if len(cmd) <= width:
+        return
+    eprint(f"[{alias}] 完整命令：", C.GRAY)
+    for line in textwrap.wrap(cmd, width=width,
+                              subsequent_indent="    ",
+                              break_long_words=True,
+                              break_on_hyphens=False):
+        eprint("  " + line, C.CYAN)
+
+
 def _confirm(alias):
-    """读一个确认键。Enter/y 执行，n 跳过，e 编辑。"""
+    """读一个确认键。Enter/y 执行，n 跳过，e 编辑。
+
+    只认这几个键：方向键和功能键的首字节是 ESC，不能被当成“执行”。
+    """
     eprint(f"[{alias}] Enter/y 执行 · n 跳过 · e 编辑 · Ctrl+C 取消", C.GREEN)
-    try:
-        key = read_key()
-    except (KeyboardInterrupt, EOFError):
-        eprint(f"\n[{alias}] 会话结束", C.GREEN)
-        raise SessionEnd()
-    key = (key or "").strip().lower()
-    if key in ("n", "s", "no", "skip"):
-        return "skip"
-    if key in ("e", "edit"):
-        return "edit"
-    return "run"
+    hinted = False
+    while True:
+        try:
+            key = read_key()
+        except (KeyboardInterrupt, EOFError):
+            eprint(f"\n[{alias}] 会话结束", C.GREEN)
+            raise SessionEnd()
+        key = (key or "").strip().lower()
+        if key in ("", "y", "yes"):
+            return "run"
+        if key in ("n", "s", "no", "skip"):
+            return "skip"
+        if key in ("e", "edit"):
+            return "edit"
+        if not hinted:
+            eprint(f"[{alias}] 只认 Enter/y · n · e，其它键已忽略",
+                   C.YELLOW)
+            hinted = True
 
 
 def _print_output(out, err, code, alias, limit=FOLD_LINES):
@@ -314,7 +344,11 @@ def rerun_last(messages, alias, cfg, capture=False):
         return False
     if action == "edit":
         try:
-            edited = interactive_input(prompt="", initial=cmd).strip()
+            edited = interactive_input(
+                prompt="", initial=cmd,
+                notice=lambda msg: eprint(f"[{alias}] {msg}",
+                                           C.YELLOW),
+            ).strip()
         except (KeyboardInterrupt, EOFError):
             eprint(f"\n[{alias}] 已取消", C.YELLOW)
             return False
@@ -556,17 +590,19 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                     continue
                 return
 
-        if loop_enabled and max_steps > 1:
-            eprint(f"[{alias}] [step {step}/{max_steps}]", C.CYAN)
-
         if not (tier == "safe" and auto_safe and loop_enabled):
+            _show_command(alias, cmd)
             action = _confirm(alias)
             if action == "edit":
                 if not sys.stdin.isatty():
                     eprint(f"[{alias}] 非交互模式下无法编辑，已跳过", C.YELLOW)
                     action = "skip"
                 else:
-                    edited = interactive_input(prompt="", initial=cmd).strip()
+                    edited = interactive_input(
+                        prompt="", initial=cmd,
+                        notice=lambda msg: eprint(f"[{alias}] {msg}",
+                                                   C.YELLOW),
+                    ).strip()
                     if not edited:
                         action = "skip"
                     elif edited == cmd:

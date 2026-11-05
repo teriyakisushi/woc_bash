@@ -36,6 +36,9 @@ def single_help(name, cfg):
   --check-templates                自检模板（应 0 error / 0 warning）
   --install-templates [ID...]      安装模板到用户级目录
 
+配套命令（纯 bash 环境里读写文件，不进 loop）:
+  woc-fs read|write|edit PATH      read 按行区间、write 整块写入、edit 精确替换
+
 管道选项:
   --max-chars N                    送进模型的 stdin 截断阈值（默认取 [pipe] max_chars）
 

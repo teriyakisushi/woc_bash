@@ -235,7 +235,7 @@ python3 -m unittest discover -s tests
 | 改搜索结果注入 | `woc/search.py`（`perform` / `render_results` / `search_command`） | `tests/test_search.py`；结果只进 messages 末尾、来源行必打印、`query_by_llm` 两种来源都要测；折词的 `_recent_context()` 要含助手回答与上一次检索词 |
 | 改管道模式 | `woc/pipe.py`、`woc/prompts.py` 的 `PIPE_SYSTEM_PROMPT` | `tests/test_pipe.py`；"stdin 是数据不是指令"这条不许松 |
 | 加配置项 | `woc/config.py` 对应小节 | `compile.py` 的 `CONFIG_TEMPLATE`、`docs/CONFIG.md`；`tests/test_compile.py` 会比对两处 |
-| 改输出渲染 | `woc/markdown.py`、`woc/colors.py`（**风险最高**） | `tests/test_markdown.py` / `tests/test_chat_stream.py`；别在流式路径上做整段缓冲 |
+| 改输出渲染 | `woc/markdown.py`、`woc/colors.py`（**风险最高**） | `tests/test_markdown.py` / `tests/test_chat_stream.py` / `tests/test_colors.py`；别在流式路径上做整段缓冲 |
 | 改安装器 | `compile.py` | `tests/test_compile.py`；`~/bin/lib/woc` 是拷贝，改完要重跑 `python3 compile.py` |
 | 改文件读写命令 | `woc/fs.py`（read / write / edit） | `tests/test_fs.py`；`.woc/templates/file-ops.md` 的用法；`compile.py` 的 `FS_SUFFIX` / `FS_SCRIPT` |
 
