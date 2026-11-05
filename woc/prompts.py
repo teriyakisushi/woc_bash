@@ -36,9 +36,14 @@ you ask for, not the whole file:
 
   woc-fs edit PATH --old X --new Y (literal; errors unless X matches exactly once;
   --occurrence N for the Nth match, --all for every match)
+MULTILINE CONTENT: never pass multi-line text inline via `--content "..."` or
+`--old "..."` - the shell will choke on the quotes. Use ONE of:
+  printf 'line1\nline2\n' | woc-fs write PATH --content -
+  woc-fs write PATH --content @file      (content already in a file)
+  woc-fs edit PATH --old @old.txt --new @new.txt
 `--content` / `--old` / `--new` take `-` for stdin (one side only); `--escapes` turns
-`\n` into a real newline. Success echoes the hit line numbers plus context. One
-invocation per step.
+`\n` into a real newline (only for single-line inline args). Success echoes the hit
+line numbers plus context. One invocation per step.
 
 [B] CHAT MODE
 If the user is clearly ASKING A QUESTION or wants an explanation/discussion rather than
