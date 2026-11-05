@@ -108,6 +108,33 @@ class RiskTierTest(unittest.TestCase):
     def test_grep_su_is_not_root_shell(self):
         self.assertFalse(L.is_root_shell("grep su README.md"))
 
+    def test_secret_paths_need_confirmation(self):
+        # `cat` 本来免确认，但 /proc/*/environ 与 /sys 里是密钥和内核状态：
+        # 读出来就进 prompt、进会话，所以退回去人工确认（DESIGN-review §10 阶段 0）。
+        for cmd in ("cat /proc/self/environ", "head -n5 /proc/1/environ",
+                    "grep -r AWS /proc/self/environ", "tail /sys/kernel/notes",
+                    "cat ./proc/environ"):
+            self.assertEqual(L.risk_tier(cmd), "confirm", cmd)
+        # 宁可多确认：文件名里带 environ 也算（`cat environ.md` 会被拦一次）。
+        self.assertEqual(L.risk_tier("cat environ.md"), "confirm")
+        for cmd in ("cat /etc/passwd", "grep -n loop README.md", "wc -l README.md"):
+            self.assertEqual(L.risk_tier(cmd), "safe", cmd)
+
+    def test_ps_with_environment_needs_confirmation(self):
+        # `ps e` 把每个进程的完整环境变量（含密钥）打到 stdout，和 `cat /proc` 同级。
+        for cmd in ("ps e", "ps auxe", "ps -auxe"):
+            self.assertEqual(L.risk_tier(cmd), "confirm", cmd)
+        # `-e` 在 SYSV 语法里只是"所有进程"，不输出环境；`-ef` 的 e 也是这个意思。
+        # ps -eo pid,cmd 的 e 属于 "-e -o"（所有进程 + 输出格式），同样不打印环境。
+        for cmd in ("ps -e", "ps -ef", "ps -eo pid,cmd", "ps aux", "ps -u root"):
+            self.assertEqual(L.risk_tier(cmd), "safe", cmd)
+
+    def test_read_only_reason_is_a_pure_function(self):
+        self.assertIsNone(L.read_only_reason("ls -l"))
+        self.assertIsNone(L.read_only_reason("ps -ef"))
+        self.assertIn("environ", L.read_only_reason("cat /proc/self/environ"))
+        self.assertIn("ps", L.read_only_reason("ps auxe"))
+
 
 class StreamFilterTest(unittest.TestCase):
     def stream(self, text):

@@ -21,7 +21,7 @@ Rules for command mode (STRICT):
    intermediate result in a variable when the later part needs it.
    Example: user asks "这个目录下最大的文件是哪个，代码怎么写的" → output BOTH the filename
    and its content, not just the path:
-     f=$(find . -type f -printf '%s %p\n' | sort -rn | head -n1 | cut -d' ' -f2-); echo "$f"; wc -l "$f"; cat "$f"
+     f=$(find . -type f -exec du -k {} + | sort -rn | head -n1 | cut -f2-); echo "$f"; wc -l "$f"; cat "$f"
    Example: user asks "占用最大的目录是什么，里面有什么" → output BOTH:
      d=$(du -sk ./* 2>/dev/null | sort -rn | head -n1 | cut -f2-); du -sh "$d"; ls -la "$d"
 8. Never ask for confirmation, never say "I will first..." / "让我先看看", and never
@@ -65,7 +65,7 @@ User: 统计 nginx 日志里访问量前 10 的 IP
 Assistant: awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head -n 10
 
 User: 这个目录下最大的文件是哪个，代码怎么写的
-Assistant: f=$(find . -type f -printf '%s %p\n' | sort -rn | head -n1 | cut -d' ' -f2-); echo "$f"; wc -l "$f"; cat "$f"
+Assistant: f=$(find . -type f -exec du -k {} + | sort -rn | head -n1 | cut -f2-); echo "$f"; wc -l "$f"; cat "$f"
 
 User: 磁盘占用最大的目录是哪个，里面都有些什么
 Assistant: d=$(du -sk ./* 2>/dev/null | sort -rn | head -n1 | cut -f2-); du -sh "$d"; ls -la "$d"

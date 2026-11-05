@@ -37,7 +37,7 @@
 | `-c` / `--chat` | `woc.cli.chat.woc_chat_main`（`via_woc=True`） | 聊天模式，Markdown 渲染 + SSE |
 | `--completion bash\|zsh` | `woc/cli/completion.py` | 生成补全脚本，纯文本输出 |
 | `--templates`（可带 `--query`） | `__main__._cmd_list_templates` | 模板索引 + 两层注入的自检视图 |
-| `--check-templates` | `__main__._cmd_lint_templates` | 期望 0 error / 2 warning（GNU `find -printf`） |
+| `--check-templates` | `__main__._cmd_lint_templates` | 期望 0 error / 0 warning（`find -printf` 已换成 POSIX `du -k`） |
 | `--install-templates [ids]` | `__main__._cmd_install_templates` | 项目级 → 用户级 |
 | 其它（含无参数） | `woc.cli.single.woc_main` | 单轮：生成 → 确认 → `execvp` |
 | `-h` / `--help` | `woc/cli/help.py`（各入口自己处理） | 只在 help 分支懒导入，正常启动不加载 |
@@ -57,20 +57,23 @@
 1. **`sanitize()`（`woc/sanitize.py`）**：取第一条有效行；剥掉 DSML / 工具调用语法；
    拒绝 `<exec_result>`、`</br>` 这类"模型在假装是 harness"的残留；`is_root_shell()`
    拦 root 身份的 shell。它管**形状**，不管危险。
-2. **`is_dangerous()` / `risk_tier()`（`woc/gate.py` / `woc/loop.py:75`）**：管**语义**。
+2. **`is_dangerous()` / `risk_tier()`（`woc/gate.py` / `woc/loop.py:123`）**：管**语义**。
    `gate.py` 是结构化的命令位置判定 —— `_split_segments` 切段、`_extract_substitutions`
    看替换、`_redirect_targets` 看重定向、`_unwrap_sudo|env|timeout|nice|...` 剥包装器、
    `_rm_reason` / `_chmod_reason` 单点判据，递归 + **fail-closed** 回退到旧子串规则。
    `risk_tier()` 返回 `deny` / `confirm` / `safe`：`deny` 不执行，`confirm` 要人按回车，
-   `safe` 在 `auto_safe=true` 时免确认。
+   `safe` 在 `auto_safe=true` 时免确认，但 `safe` 之前还有一层参数复核
+   （`read_only_reason()`，`woc/loop.py:87`）：只读命令里会打印环境变量的写法
+   （`cat /proc/self/environ`、`ps auxe`）降级成 `confirm`。
 3. **`bash -n`（`woc/exec.py`）**：只解析不执行。它挡脏字符与拼写错误，**不是安全边界**
    ——文档里明写这句话，是为了避免有人把它当第二道门。
 
 `gate.py` 的判定是"命令位置"级别的：`printf 'reboot'`、`grep reboot`、`man reboot`
 不再误报；`systemctl reboot`、`sudo reboot`、`bash -c 'reboot'`、`find -exec rm` 仍然拦。
-已知缺口（不是回归，是取舍）：`ps auxe` 与 `cat /proc/self/environ` 会被判 `safe`，
-`redact_secrets()` 的字段名单也漏 `SECRET_KEY=` / `AWS_SECRET_ACCESS_KEY=` ——
-证据与修法在 `docs/COMPETITORS-2026-11.md` §5.3 / §6.1。
+阶段 0 已收口（2026-11-05）：`ps auxe` / `cat /proc/self/environ` 降级成 `confirm`
+（`read_only_reason()`，`woc/loop.py:87`），`redact_secrets()` 补到「字段名含关键词 + Bearer/PEM」。
+仍留的缺口：裸 token 没有字段名就没有判据；`env` / `printenv` 本来不在 `READ_ONLY`；
+`sudo -u root bash` 抓不到。证据在 `docs/COMPETITORS-2026-11.md` §5.3。
 
 ---
 
@@ -85,8 +88,8 @@
 | 3 | `<templates>`（索引层恒定全量 + 正文层按查询检索） | 会话级 |
 | 4 | `<environment>`（cwd、平台、几条环境事实；`render_environment()`） | 会话级 |
 
-实测前缀规模（`cwd="."`，`alias=woc`）：单轮 **8,225 字符**；多轮 **8,876**；
-多轮 + loop **10,268**。这一段是缓存命中的唯一依据，所以：
+实测前缀规模（`cwd="."`，`alias=woc`）：单轮 **8,213 字符**；多轮 **8,864**；
+多轮 + loop **10,256**。（2026-11-05 把 `find -printf` 示例换成 `du -k`，三段各减 12 字符。）这一段是缓存命中的唯一依据，所以：
 
 - 不许塞时间戳、git 状态、实时负载、随机 id —— 一次变化 = 整段重建。
 - 用户消息、执行结果、搜索结果一律追加在**前缀之后**，不进系统段。
@@ -182,21 +185,23 @@ fs.py        纯 IO，只被 woc-fs 调用        （独立命令，不参与 lo
 | 调试输出 | stderr | `WOC_DEBUG=1` 才有（`woc/debug.py`：usage、前缀规模、loop 每步）。stdout 只放答案与命令 |
 | 执行结果 | 不落盘 | 命令输出只在内存里回灌下一轮；`:more` 从 `_LAST` 重新展开 |
 
-落盘前统一过 `redact_secrets()`（`woc/exec.py:91`）。它按 `password|passwd|passphrase|
-secret|token|api_key` 六个字段名匹配，**已知漏配**（`SECRET_KEY=`、`AWS_SECRET_ACCESS_KEY=`、
-`BEGIN RSA PRIVATE KEY`）——所以 `auto_safe=true` 下"免确认读环境变量"这件事有真实风险，
-见 §3 末尾与 `docs/COMPETITORS-2026-11.md` §5.3。
+落盘前统一过 `redact_secrets()`（`woc/exec.py:110`）：先抹 PEM 私钥整块与
+`Bearer/Basic/Digest` 凭据，再按**字段名里的关键词**（`password` / `secret` / `token` /
+`api_key` / `access_key` / `credential` / `authorization` …）把值换成 `***`，最后处理
+`Environment=` 行。宁可多抹：`tokenizer=x` 也会中招。裸 token（没有字段名）不在覆盖
+范围内 —— 那类内容只能靠 `read_only_reason()` 不让它被执行。
 
 ---
 
 ## 9. 测试地图（改哪里，先跑哪一组）
 
-全部离线，`python3 -m unittest discover -s tests`（290+ 个用例，约 0.3 s，1 个 live skip）。
+全部离线，`python3 -m unittest discover -s tests`（310+ 个用例，约 0.3 s，1 个 live skip）。
 `WOC_LIVE_TEST=1` 才真调 API —— 会有费用，默认不跑。
 
 | 文件 | 守住什么 |
 |---|---|
 | `tests/test_gate.py` | 危险判定：`is_dangerous` / `is_root_shell` 的命令位置语义、包装器、递归、fail-closed 回退 |
+| `tests/test_exec.py` | `redact_secrets`：字段名关键词、Bearer、PEM、`Environment` 行、幂等性 |
 | `tests/test_loop.py` | `risk_tier` 三档、`#STEP:` 粘性、步数与字符上限、折叠与 `:more` |
 | `tests/test_pipe.py` | 管道模式：`detect_format` 只认 diff/json、prompt 不预设日志、二进制拒绝、头尾截断 |
 | `tests/test_search.py` | 搜索：`query_by_llm` 两种来源、`derive_query` 回退、来源行、字符预算、懒加载 |

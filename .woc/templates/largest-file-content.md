@@ -13,7 +13,7 @@ when: 用户同时问"最大的文件是哪个"和"内容/代码是什么"
 # 参考命令（作者标注，未经验证）
 
 ```bash
-f=$(find . -type f -printf '%s %p\n' | sort -rn | head -n1 | cut -d' ' -f2-); echo "$f"; ls -l "$f"; wc -l "$f"; cat "$f"
+f=$(find . -type f -exec du -k {} + | sort -rn | head -n1 | cut -f2-); echo "$f"; ls -l "$f"; wc -l "$f"; cat "$f"
 ```
 
 # 约定
@@ -27,7 +27,9 @@ f=$(find . -type f -printf '%s %p\n' | sort -rn | head -n1 | cut -d' ' -f2-); ec
 - 不要只输出 `find ... | head -n1` 就结束 —— 那只回答了"是哪个"，用户还得再问一次。
 - 不要用 `ls -S | head -n1`：它不递归子目录，而且在没有文件时会报错。
 - 不要把 `cat` 换成 `less`/`vi`：交互式分页器会把 `woc` 卡住。
-- `find -printf` 是 GNU 扩展，BSD/macOS 上不可用；本机是 Linux 所以没问题。
+- 不用 `find -printf`：它是 GNU 扩展，BSD/macOS 上直接报错。
+  `du -k` 是 POSIX，两边都能跑；代价是按 1K 块取整、按磁盘占用而不是字节数排序。
+  只想知道「哪个文件最大」时这点误差无所谓，但 `-exec du -k {} +` 会更慢一点。
 
 # 已知噪声（本仓库实测）
 
@@ -40,5 +42,5 @@ f=$(find . -type f -printf '%s %p\n' | sort -rn | head -n1 | cut -d' ' -f2-); ec
 如果用户问的是"代码"，加过滤：
 
 ```bash
-f=$(find . -type f -name '*.py' -printf '%s %p\n' | sort -rn | head -n1 | cut -d' ' -f2-); echo "$f"; wc -l "$f"; cat "$f"
+f=$(find . -type f -name '*.py' -exec du -k {} + | sort -rn | head -n1 | cut -f2-); echo "$f"; wc -l "$f"; cat "$f"
 ```

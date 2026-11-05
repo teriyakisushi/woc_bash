@@ -8,6 +8,7 @@
 """
 
 import re
+import shlex
 import sys
 import time
 
@@ -72,13 +73,62 @@ def is_pure_simple_cmd(cmd):
     return True
 
 
+# 会"把文件内容打出来"的只读命令：路径参数要单独复核（见 read_only_reason）。
+_CONTENT_READERS = frozenset({"cat", "head", "tail", "grep"})
+
+# 这些路径里装的是**环境变量**（token / key），不是普通文件内容。
+_ENV_PATH_RE = re.compile(r"(?:^|/)proc(?:/|$)|(?:^|/)sys(?:/|$)|environ", re.I)
+
+# `ps` 的 BSD `e` 旗标会把进程环境变量一起打印（`ps auxe`）。`-e` / `-ef` 只是
+# "选所有进程"，不带环境，所以只对"字母组合里同时有 e 和 a/u/x"的写法降级。
+_PS_BSD_ENV_NEIGHBOURS = "aux"
+
+
+def read_only_reason(cmd):
+    """`READ_ONLY` 白名单的参数级复核：返回降级原因，安全则返回 None。
+
+    `cat` / `ps` 是只读的，但会把**别的进程的环境变量**摊在屏幕上：
+    `cat /proc/self/environ`、`ps auxe` 在 `auto_safe=true` 下会免确认执行，
+    输出再回灌给模型、再落进会话文件。这里把它们降级到 `confirm`
+    （不 deny：`ps auxe` 有正当用途，`/proc` 也可能只是查内核参数）。
+    """
+    try:
+        argv = shlex.split(cmd)
+    except ValueError:
+        argv = cmd.split()
+    if not argv:
+        return None
+    head, args = argv[0], argv[1:]
+
+    if head == "ps":
+        for arg in args:
+            if arg.startswith("-"):
+                letters = arg.lstrip("-")
+                if "e" in letters and any(ch in letters for ch in _PS_BSD_ENV_NEIGHBOURS):
+                    return "ps 的 e 旗标会打印进程环境变量"
+                continue
+            if "e" in arg:
+                return "ps 的 e 旗标会打印进程环境变量"
+        return None
+
+    if head in _CONTENT_READERS:
+        for arg in args:
+            if arg.startswith("-"):
+                continue
+            if _ENV_PATH_RE.search(arg):
+                return "读取 /proc、/sys 或 environ（进程环境变量）"
+    return None
+
+
 def risk_tier(cmd):
     """safe / confirm / deny —— 只决定要不要人工确认，不决定要不要执行。"""
     if is_dangerous(cmd) or is_root_shell(cmd):
         return "deny"
     if not is_pure_simple_cmd(cmd):
         return "confirm"
-    return "safe" if cmd.split()[0] in READ_ONLY else "confirm"
+    if cmd.split()[0] not in READ_ONLY:
+        return "confirm"
+    return "confirm" if read_only_reason(cmd) else "safe"
 
 
 def max_steps_for(cfg, loop_enabled=True):

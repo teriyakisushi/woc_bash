@@ -36,7 +36,7 @@
 python3 woc.py "查看当前目录下最大的 3 个文件"   # 单轮（会 execvp，别在测试里直接跑）
 python3 wocc.py --loop                          # 多轮 + agentic loop
 python3 woc.py --templates                      # 模板索引与两层注入
-python3 woc.py --check-templates                # 模板自检（应 0 error / 2 warning）
+python3 woc.py --check-templates                # 模板自检（应 0 error / 0 warning）
 WOC_DEBUG=1 python3 woc.py "..."                # 观测 usage/缓存/前缀规模（stderr）
 
 python3 -m compileall -q woc tests              # 语法
@@ -97,6 +97,14 @@ CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查�
 - 它不是沙箱：解析失败、stdin 喂给 shell、或 `awk`/`sed`/`python` 等脚本宿主会回退
   旧子串规则（fail-closed）；动态拼接、脚本文件内容仍可能绕过。
 - `is_root_shell()` 有刻意缺口：`sudo -u root bash` 抓不到。
+- `risk_tier()` 在 `safe` 之前还有一层参数复核（`read_only_reason()`，`woc/loop.py:87`）：
+  `cat|head|tail|grep` 读 `/proc`、`/sys`、`environ`，以及 `ps` 的 BSD `e` 旗标
+  （`ps e`、`ps auxe`）一律降到 `confirm`。往 `READ_ONLY` 加命令前先想清楚：
+  它会不会把别的进程的环境变量打出来。
+- `redact_secrets()`（`woc/exec.py:110`）按**字段名里的关键词**匹配
+  （`*SECRET*`、`*TOKEN*`、`AWS_*`、`*PASSWORD*`、`Environment` 行）以及凭据形状
+  （`Bearer ...`、PEM 私钥块）。裸 token（没有字段名）仍不覆盖 —— 没有判据，
+  只能靠上面那条参数复核不让它被执行。
 - `bash -n` 语法预检只解析、不执行；它挡的是脏字符/拼写错误，不是安全边界。
 - 需要 sudo 密码且无 ticket 时，`wocc` 前台执行且**不回灌输出**（防止 root 可读内容进 prompt）。
 - 模型偶尔会把中文回答当成命令（漏 `#CHAT:`）；已有 exit 127 提示，不要静默吞掉。

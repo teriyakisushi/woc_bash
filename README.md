@@ -690,6 +690,11 @@ LLM 输出不应被视为绝对可信。执行命令前请检查命令内容、�
 - 拦截：`systemctl reboot`、`sudo reboot`、`bash -c 'reboot'`、`find -exec reboot`、
   `rm -rf /`、`mkfs`、`dd of=/dev/sd*`、`> /dev/sd*`、`chmod -R 777 /`。
 
+"只读"不等于"无泄露"：`cat /proc/self/environ`、`ps e` / `ps auxe` 会把进程的环境变量
+（token、密钥）原样打出来。这类写法即使在 `auto_safe=true` 下也要人工确认；回灌给模型
+与落盘的内容另外过一遍 `redact_secrets()`（字段名带 `secret`/`token`/`password` 的值、
+`Bearer` 凭据、PEM 私钥块都换成 `***`；裸 token 仍不覆盖）。
+
 `sh -c` / `eval` / `find -exec` / `xargs` 会递归检查；解析失败或 stdin 喂给 shell 时
 回退到旧的子串规则（fail-closed）。但它仍**不是完整沙箱**：脚本文件内容、动态拼接、
 编码混淆都可能绕过；`awk` / `sed` / `python` 等可执行代码的宿主命令只在检测到
