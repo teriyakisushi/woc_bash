@@ -73,7 +73,7 @@
 阶段 0 已收口（2026-11-05）：`ps auxe` / `cat /proc/self/environ` 降级成 `confirm`
 （`read_only_reason()`，`woc/loop.py:87`），`redact_secrets()` 补到「字段名含关键词 + Bearer/PEM」。
 仍留的缺口：裸 token 没有字段名就没有判据；`env` / `printenv` 本来不在 `READ_ONLY`；
-`sudo -u root bash` 抓不到。证据在 `docs/COMPETITORS-2026-11.md` §5.3。
+`sudo -u root bash` 抓不到。证据在 `本机横评（未入库）` §5.3。
 
 ---
 
@@ -227,7 +227,7 @@ python3 -m unittest discover -s tests
 
 | 想改的事 | 先读 | 必须同步 |
 |---|---|---|
-| 加一个 CLI flag | `woc/__main__.py`（分流顺序）、`woc/cli/help.py` | `tests/test_help.py`；`docs/COMPETITORS-2026-11.md` §5.1 的 flag 清单 |
+| 加一个 CLI flag | `woc/__main__.py`（分流顺序）、`woc/cli/help.py` | `tests/test_help.py`；`本机横评（未入库）` §5.1 的 flag 清单 |
 | 改危险判定 | `woc/gate.py`（`is_dangerous` / `_split_segments` / `_unwrap_*`） | `tests/test_gate.py`；`woc/loop.py:35` 的 `READ_ONLY` 与 `woc/loop.py:44` 的 `_UNBOUNDED`；§3 的缺口清单 |
 | 改"要不要确认" | `woc/loop.py:75 risk_tier`、`_limits`、`_confirm` | `tests/test_loop.py`；**不许**为了少按回车放宽白名单 |
 | 改系统提示 / 前缀 | `woc/prompts.py`、`woc/context.py:659 messages_prefix` | `tests/test_context.py`；§4 的四段顺序与"逐字节不变"（一次改动 = 一次缓存重建） |
@@ -248,5 +248,5 @@ python3 -m unittest discover -s tests
 - `docs/CONFIG.md` —— 每个配置键的含义、默认值与环境变量。
 - `docs/DESIGN-agentic-loop.md` —— loop 的设计取舍与踩过的坑（尤其 §8.1 历史格式）。
 - `docs/DESIGN-web-search.md` —— 搜索的成本模型、注入位置与未做项。
-- `docs/COMPETITORS-2026-11.md` —— 同类产品横评：我们缺什么、哪些不该抄。
-- `docs/HANDOFF-2026-11-03.md` —— 本轮改动与下一步。
+- `本机横评（未入库）` —— 同类产品横评：我们缺什么、哪些不该抄。
+- 本机交接文档（`docs/HANDOFF-*.md`，未入库）—— 当轮改动与下一步。

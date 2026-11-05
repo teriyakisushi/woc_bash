@@ -5,6 +5,7 @@ Shell 命令，也可以回答问题、执行命令并在多轮会话中继续�
 
 > 想改代码？先看 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**：七条不变量、三道边界、
 > 稳定前缀为什么不能动、loop 状态机，以及"改哪里先看哪里"的速查表。
+> English version: [README_EN.md](README_EN.md)
 
 ## 功能
 

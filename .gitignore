@@ -13,8 +13,9 @@ woc
 .idea/
 *.swp
 
-# 本地交接文档（不入库）
+# 本地调研与交接文档（不入库）
 HANDOFF*.md
+docs/COMPETITORS*.md
 
 # 工具/编辑器留下的临时副本
 *dsh-ops-*
