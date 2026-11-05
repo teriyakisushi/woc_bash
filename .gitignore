@@ -16,6 +16,8 @@ woc
 # 本地调研与交接文档（不入库）
 HANDOFF*.md
 docs/COMPETITORS*.md
+docs/DESIGN-review.md
+docs/DESIGN-trust-valve.md
 
 # 工具/编辑器留下的临时副本
 *dsh-ops-*

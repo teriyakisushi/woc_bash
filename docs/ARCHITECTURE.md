@@ -243,7 +243,9 @@ python3 -m unittest discover -s tests
 
 ## 相关文档
 
-- `README.md` —— 用户视角：怎么用、配置、模板、已知限制。
+- `README.md` —— 用户视角的入口：功能、安装、快速上手、文档索引。
+- `docs/USAGE.md` —— 使用与安全：管道、`woc-fs`、多轮、会话恢复、聊天、补全、卸载。
+- `docs/TEMPLATES.md` —— 模板格式、两层注入与缓存约束。
 - `AGENTS.md` —— 给 AI agent 的硬约束与代码地图（本文件是它的"为什么"）。
 - `docs/CONFIG.md` —— 每个配置键的含义、默认值与环境变量。
 - `docs/DESIGN-agentic-loop.md` —— loop 的设计取舍与踩过的坑（尤其 §8.1 历史格式）。
