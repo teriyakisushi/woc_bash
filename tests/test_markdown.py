@@ -35,6 +35,12 @@ SAMPLES = [
     "line with **unclosed bold\n",
     "header\r\nrow1\r\n\r\n",
     "\n\n\n",
+    # 长行：模型写长段落时一行可能上千字，必须边收边吐
+    "长" * 300 + "\n",
+    "prose with **bold** and `code` " * 12 + "\n",
+    "a | b 正文竖线 " * 30 + "\n",
+    "star * and **bold** tail *\n",
+    "x" * (HOLD_CHARS * 2) + "tail\n",
 ]
 
 
@@ -52,12 +58,19 @@ def forced_colors():
 
 
 def stream_all(text, colors, size=3, sanitize=None):
-    out = []
-    stream = MarkdownStream(colors, out.append, sanitize=sanitize)
+    """流式渲染，返回屏幕上应该出现的全文（`write` 拿到的就是最终字节）。"""
+    screen = []
+    stream = MarkdownStream(colors, screen.append, sanitize=sanitize)
     for start in range(0, len(text), size):
         stream.feed(text[start:start + size])
     stream.finish()
-    return "\n".join(out)
+    return "".join(screen)
+
+
+def one_shot(text, colors):
+    """一次性渲染，补上流式路径每行都会写的那个换行。"""
+    rendered = render_markdown(text, colors)
+    return rendered + "\n" if rendered else rendered
 
 
 class RenderTest(unittest.TestCase):
@@ -84,7 +97,7 @@ class RenderTest(unittest.TestCase):
             with context:
                 colors = C(_Tty()) if colored else C(io.StringIO())
                 for sample in SAMPLES:
-                    expected = render_markdown(sample, colors)
+                    expected = one_shot(sample, colors)
                     for size in (1, 2, 3, 7, 13, HOLD_CHARS, 1000):
                         self.assertEqual(
                             stream_all(sample, colors, size=size),
@@ -101,11 +114,11 @@ class StreamTest(unittest.TestCase):
 
     def test_text_appears_at_once(self):
         self.stream.feed("第一行")
-        self.assertEqual(self.out, [])          # 行还没写完，先攒着
+        self.assertEqual(self.out, [])           # 行还没写完，先攒着
         self.stream.feed("\n")
-        self.assertEqual(self.out, ["第一行"])   # 换行一到立刻上屏
+        self.assertEqual(self.out, ["第一行\n"])  # 换行一到立刻上屏
         self.stream.finish()
-        self.assertEqual(self.out, ["第一行"])
+        self.assertEqual(self.out, ["第一行\n"])
 
     def test_table_held_until_complete(self):
         self.stream.feed("| a | b |\n")
@@ -114,7 +127,8 @@ class StreamTest(unittest.TestCase):
         self.assertEqual(self.out, [])          # 表格要整块才知道列宽
         self.stream.feed("\n")
         self.assertEqual(self.out, [
-            "+---+---+", "| a | b |", "+---+---+", "| 1 | 2 |", "+---+---+", "",
+            "+---+---+\n", "| a | b |\n", "+---+---+\n", "| 1 | 2 |\n",
+            "+---+---+\n", "\n",
         ])
 
     def test_long_line_does_not_wait_for_newline(self):
@@ -124,12 +138,44 @@ class StreamTest(unittest.TestCase):
         self.assertLessEqual(len(self.out[0]), HOLD_CHARS)
         self.assertTrue(text.startswith(self.out[0]))
 
+    def test_prose_line_streams_in_pieces(self):
+        """长度没到 HOLD_CHARS 的散文行也要边收边吐，不能等换行。"""
+        text = "这是一段没有换行的长回答，模型会一个字一个字地吐出来。" * 2
+        for char in text:
+            self.stream.feed(char)
+        self.assertGreater(len(self.out), 3, "逐字到达就该逐块上屏")
+        self.stream.feed("\n")
+        self.stream.finish()
+        self.assertEqual("".join(self.out), text + "\n")
+
+    def test_partial_keeps_tokens_whole(self):
+        """半截 `**` / 反引号 / 列表符号 / 控制标记都不能先吐。"""
+        for char in "- 先说 **粗体** 和 `代码` 都" + "要" * 12 + "对齐\n":
+            self.stream.feed(char)
+        self.stream.finish()
+        screen = "".join(self.out)
+        self.assertNotIn("**", screen)
+        self.assertNotIn("`", screen)
+        self.assertTrue(screen.startswith("• "))
+        self.assertEqual(screen.count("\n"), 1)
+
+    def test_bold_does_not_stall_the_rest_of_the_line(self):
+        """行中间有 `**粗体**`，后面的正文要继续吐（回归：行首判断误用到中段）。"""
+        for char in "前文 **粗体** 后面还有很多字" + "长" * 40:
+            self.stream.feed(char)
+        self.assertGreater(len(self.out), 3, "粗体之后不该退回整行等待")
+        self.stream.feed("\n")
+        self.stream.finish()
+        screen = "".join(self.out)
+        self.assertNotIn("**", screen)
+        self.assertEqual(screen.count("\n"), 1)
+
     def test_sanitize_before_display(self):
         stream = MarkdownStream(self.colors, self.out.append,
                                 sanitize=lambda text: text.replace("<DSML>", ""))
         stream.feed("<DSML>hello\n")
         stream.finish()
-        self.assertEqual(self.out, ["hello"])
+        self.assertEqual(self.out, ["hello\n"])
 
 
 if __name__ == "__main__":

@@ -41,8 +41,8 @@ def _stream_once(messages, cfg, alias, colors, can_search, status):
         sys.stdout.write(text)
         sys.stdout.flush()
 
-    renderer = MarkdownStream(
-        colors, lambda line: write(line + "\n"), sanitize=strip_dsml)
+    # `write` 拿到的就是该上屏的字节：完整行已带换行，长行里的半截没有。
+    renderer = MarkdownStream(colors, write, sanitize=strip_dsml)
     spin = Spinner(f"[{alias}] Thinking", enabled=spinner_enabled(cfg))
 
     def on_mode(mode):
