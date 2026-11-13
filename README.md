@@ -1,8 +1,10 @@
 # woc
 
+**中文** | [English](README_EN.md)
+
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-success)](woc.py)
-[![Tests](https://img.shields.io/badge/tests-332%20passing-brightgreen)](.github/workflows/test.yml)
+[![Tests](https://img.shields.io/badge/tests-335%20passing-brightgreen)](.github/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 `woc` 是一个运行在终端里的自然语言命令助手。它可以把日常描述转换成
@@ -10,7 +12,6 @@ Shell 命令，也可以回答问题、执行命令并在多轮会话中继续�
 
 > 想改代码？先看 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**：七条不变量、三道边界、
 > 稳定前缀为什么不能动、loop 状态机，以及"改哪里先看哪里"的速查表。
-> English version: [README_EN.md](README_EN.md)
 
 ## 功能
 

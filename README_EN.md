@@ -1,14 +1,15 @@
 # woc
 
+[中文](README.md) | **English**
+
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-success)](woc.py)
-[![Tests](https://img.shields.io/badge/tests-332%20passing-brightgreen)](.github/workflows/test.yml)
+[![Tests](https://img.shields.io/badge/tests-335%20passing-brightgreen)](.github/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 `woc` is a natural-language command assistant that runs in your terminal. It turns everyday descriptions into Shell commands, answers questions, and can execute commands while carrying the results forward across multi-turn sessions.
 
 > Want to change the code? Read **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** first: the seven invariants, the three boundaries, why the stable prefix must not move, the loop state machine, and a "where to look before you change what" cheat sheet.
-> 中文版：[README.md](README.md)
 
 ## Features
 
