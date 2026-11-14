@@ -9,7 +9,7 @@ template_card:
 
   main_title:
     title: "喂老登，这里有新的Push通知"
-    desc: "{{ actor | truncate(12) }} 在 {{ ref_name | truncate(14) }} 踩了一爪"
+    desc: "{{ actor | truncate(16) }} 在 {{ ref_name | truncate(14) }} 踩了一爪"
 
   card_image:
     url: "https://safebooru.org//images/1111/9ead22a2a540dc663a6e0fba5b71ccc3cf0c5ace.jpg"
