@@ -1,0 +1,57 @@
+msgtype: template_card
+
+template_card:
+  card_type: news_notice
+
+  source:
+    desc: "Push|🐾 很不高兴"
+    desc_color: 3
+
+  main_title:
+    title: "喂老登，这里有新的Push通知"
+    desc: "{{ actor | truncate(12) }} 在 {{ ref_name | truncate(14) }} 踩了一爪"
+
+  card_image:
+    url: "https://safebooru.org//images/1111/9ead22a2a540dc663a6e0fba5b71ccc3cf0c5ace.jpg"
+    aspect_ratio: 1.78
+
+  image_text_area:
+    type: 1
+    url: "{{ compare_url | default(repo.html_url) }}"
+    title: "点这里看改动"
+    desc: "{{ head_commit.first_line | default('这次没有新提交喵…') | truncate(80) }}"
+    image_url: "https://safebooru.org//images/1111/9ead22a2a540dc663a6e0fba5b71ccc3cf0c5ace.jpg"
+
+  # 没有提交（分支创建 / 空推）时整块消失，避免空 quote_text 被校验拦下。
+  quote_area:
+    $if: commit_count > 0
+    type: 1
+    url: "{{ compare_url | default(repo.html_url) }}"
+    title: "📮 提交信息在这里"
+    quote_text:
+      $each: commits
+      $limit: 4
+      $join: "\n"
+      $item: "• {{ item.first_line | default(item.short_sha) | truncate(58) }}"
+
+  horizontal_content_list:
+    - keyname: 仓库
+      value: "{{ repo.full_name | truncate(24) }}"
+    - keyname: 分支
+      value: "{{ ref_name | default('?') }}"
+    - keyname: 提交
+      value: "{{ commit_count }} 个提交"
+    - keyname: 作者
+      value: "{{ actor }}"
+
+  jump_list:
+    - title: Comparison
+      url: "{{ compare_url | default(repo.html_url) }}"
+    - title: Commits
+      url: "{{ commit_url | default(repo.html_url) }}"
+    - title: Repo
+      url: "{{ repo.html_url }}"
+
+  card_action:
+    type: 1
+    url: "{{ compare_url | default(repo.html_url) }}"

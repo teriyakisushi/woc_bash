@@ -1,0 +1,59 @@
+msgtype: template_card
+
+template_card:
+  card_type: news_notice
+
+  source:
+    desc: "CI|有事说事"
+    desc_color: 1
+
+  main_title:
+    title: "🐱 喂老登，CI来了"
+    desc: "{{ workflow | default('CI') | truncate(10) }} · {{ workflow_run.head_branch | default(ref_name) | truncate(8) }}"
+
+  card_image:
+    url: "https://safebooru.org//images/854/231edc8de6d303a59089867d91b43f2f5b613908.jpg"
+    aspect_ratio: 1.33
+
+  vertical_content_list:
+    - $if: workflow_run.conclusion == "success"
+      title: "✅ 绿了"
+      desc: "可喜可乐🎉。"
+    - $if: workflow_run.conclusion == "failure"
+      title: "💀 寄了"
+      desc: "红了，自己点日志😈"
+    - $if: workflow_run.conclusion == "cancelled" || workflow_run.conclusion == "timed_out"
+      title: "💤 凉了"
+      desc: "被掐了或者超时😄"
+    - $if: workflow_run.status == "in_progress" || workflow_run.status == "queued"
+      title: "🏃 还在跑"
+      desc: "没好，等着，别催。"
+
+  horizontal_content_list:
+    - keyname: 分支
+      value: "{{ workflow_run.head_branch | default(ref_name) | default('?') }}"
+    - keyname: 结果
+      value: "{{ workflow_run.conclusion | default(workflow_run.status) | default('unknown') }}"
+    - keyname: 触发
+      value: "{{ workflow_run.event | default(event_name) }}"
+    - keyname: 次数
+      value: "第 {{ workflow_run.run_number | default(run_number) | default('?') }} 次"
+
+  quote_area:
+    $if: workflow_run.head_commit
+    type: 1
+    url: "{{ workflow_run.html_url | default(run_url) }}"
+    title: "📮 这次提交"
+    quote_text: "{{ workflow_run.head_commit.message | firstLine | truncate(180) }}"
+
+  jump_list:
+    - title: Logs
+      url: "{{ workflow_run.html_url | default(run_url) }}"
+    - title: Commits
+      url: "{{ repo.html_url }}/commit/{{ workflow_run.head_sha | default(sha) }}"
+    - title: Repo
+      url: "{{ repo.html_url }}"
+
+  card_action:
+    type: 1
+    url: "{{ workflow_run.html_url | default(run_url) }}"

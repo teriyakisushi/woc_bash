@@ -23,3 +23,26 @@ jobs:
 
       - name: 离线回归测试
         run: python -m unittest discover -s tests -v
+
+  push-notify:
+    name: 企业微信 push 播报
+    needs: test
+    if: always() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+    steps:
+      - name: 没配 webhook 就跳过
+        if: env.WECOM_WEBHOOK == ''
+        run: echo "::notice title=WECOM_WEBHOOK::未配置 secret，跳过企业微信通知。"
+
+      - uses: actions/checkout@v4
+        if: env.WECOM_WEBHOOK != ''
+
+      - name: 发 push 卡片
+        if: env.WECOM_WEBHOOK != ''
+        uses: teriyakisushi/wecom-notifier@v1
+        with:
+          webhook: ${{ secrets.WECOM_WEBHOOK }}
+          template-dir: .github/wecom-notify
+          fail-on-error: "false"
