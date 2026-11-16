@@ -70,10 +70,10 @@
 
 `gate.py` 的判定是"命令位置"级别的：`printf 'reboot'`、`grep reboot`、`man reboot`
 不再误报；`systemctl reboot`、`sudo reboot`、`bash -c 'reboot'`、`find -exec rm` 仍然拦。
-阶段 0 已收口（2026-11-05）：`ps auxe` / `cat /proc/self/environ` 降级成 `confirm`
+当前收口状态：`ps auxe` / `cat /proc/self/environ` 降级成 `confirm`
 （`read_only_reason()`，`woc/loop.py:87`），`redact_secrets()` 补到「字段名含关键词 + Bearer/PEM」。
 仍留的缺口：裸 token 没有字段名就没有判据；`env` / `printenv` 本来不在 `READ_ONLY`；
-`sudo -u root bash` 抓不到。证据在 `本机横评（未入库）` §5.3。
+`sudo -u root bash` 抓不到。
 
 ---
 
@@ -89,7 +89,7 @@
 | 4 | `<environment>`（cwd、平台、几条环境事实；`render_environment()`） | 会话级 |
 
 实测前缀规模（`cwd="."`，`alias=woc`）：单轮 **8,213 字符**；多轮 **8,864**；
-多轮 + loop **10,256**。（2026-11-05 把 `find -printf` 示例换成 `du -k`，三段各减 12 字符。）这一段是缓存命中的唯一依据，所以：
+多轮 + loop **10,256**。这一段是缓存命中的唯一依据，所以：
 
 - 不许塞时间戳、git 状态、实时负载、随机 id —— 一次变化 = 整段重建。
 - 用户消息、执行结果、搜索结果一律追加在**前缀之后**，不进系统段。
@@ -228,7 +228,7 @@ python3 -m unittest discover -s tests
 
 | 想改的事 | 先读 | 必须同步 |
 |---|---|---|
-| 加一个 CLI flag | `woc/__main__.py`（分流顺序）、`woc/cli/help.py` | `tests/test_help.py`；`本机横评（未入库）` §5.1 的 flag 清单 |
+| 加一个 CLI flag | `woc/__main__.py`（分流顺序）、`woc/cli/help.py` | `tests/test_help.py`；README 里的 flag 清单 |
 | 改危险判定 | `woc/gate.py`（`is_dangerous` / `_split_segments` / `_unwrap_*`） | `tests/test_gate.py`；`woc/loop.py:35` 的 `READ_ONLY` 与 `woc/loop.py:44` 的 `_UNBOUNDED`；§3 的缺口清单 |
 | 改"要不要确认" | `woc/loop.py:75 risk_tier`、`_limits`、`_confirm` | `tests/test_loop.py`；**不许**为了少按回车放宽白名单 |
 | 改系统提示 / 前缀 | `woc/prompts.py`、`woc/context.py:659 messages_prefix` | `tests/test_context.py`；§4 的四段顺序与"逐字节不变"（一次改动 = 一次缓存重建） |
@@ -250,7 +250,5 @@ python3 -m unittest discover -s tests
 - `docs/TEMPLATES.md` —— 模板格式、两层注入与缓存约束。
 - `AGENTS.md` —— 给 AI agent 的硬约束与代码地图（本文件是它的"为什么"）。
 - `docs/CONFIG.md` —— 每个配置键的含义、默认值与环境变量。
-- `docs/DESIGN-agentic-loop.md` —— loop 的设计取舍与踩过的坑（尤其 §8.1 历史格式）。
-- `docs/DESIGN-web-search.md` —— 搜索的成本模型、注入位置与未做项。
-- `本机横评（未入库）` —— 同类产品横评：我们缺什么、哪些不该抄。
-- 本机交接文档（`docs/HANDOFF-*.md`，未入库）—— 当轮改动与下一步。
+- `docs/DESIGN-agentic-loop.md` —— loop 的设计取舍与不变量（尤其 §8.1 历史格式）。
+- `docs/DESIGN-web-search.md` —— 搜索的成本模型、注入位置与范围外项。

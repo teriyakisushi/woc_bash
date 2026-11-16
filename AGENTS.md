@@ -1,8 +1,7 @@
 # AGENTS.md
 
 Notes for AI agents working in this repository. Humans should read [README.md](README.md);
-design trade-offs and hard-won lessons live in `docs/DESIGN-agentic-loop.md` (`docs/HANDOFF-*.md`
-are local and gitignored). For the big picture see `docs/ARCHITECTURE.md`: seven invariants,
+design trade-offs and hard-won lessons live in `docs/DESIGN-agentic-loop.md`. For the big picture see `docs/ARCHITECTURE.md`: seven invariants,
 three boundaries, dependency direction, and a "where to look before changing what" cheat sheet —
 skim that table before touching code.
 

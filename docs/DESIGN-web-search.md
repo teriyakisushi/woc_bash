@@ -1,9 +1,8 @@
 # 设计摘要：网页搜索（`woc -c` / `:search`）
 
-> 状态：**已实现并收尾（2026-10-21，基线 `2878fa5`）**。范围是 `woc -c` 聊天模式：
-> 默认由模型按需发 `#SEARCH:`（`--no-search` 关闭），`:search <关键词>` 在 `woc -c`
-> 与 `wocc` 里都可以人工指定搜索内容（见 §8.1）。单轮 `woc` 与 `wocc` 的 loop
-> step 仍未接。
+> 状态：`woc -c` 聊天模式的搜索已实现，默认由模型按需发 `#SEARCH:`（`--no-search` 关闭）；
+> `:search <关键词>` 在 `woc -c` 与 `wocc` 里都可以人工指定搜索内容（见 §8.1）。
+> 单轮 `woc` 与 `wocc` 的 loop step 仍未接（§10）。
 >
 > 目的不是说服，而是把代价摆出来：这个项目的卖点是"一条命令 + 一次确认 + 一次请求"，
 > 搜索是**第二个 HTTP 请求**，它必须证明自己没有把这三件事变贵。
@@ -172,25 +171,25 @@ summary: ...
 
 ---
 
-## 8. 实现记录（2026-10-21）
+## 8. 落地形态
 
 | 文件 | 改动 |
 |---|---|
-| `woc/search.py` | **新增** 257 行：端点推导、请求、归一化、渲染、错误 |
+| `woc/search.py` | **新增**：端点推导、请求、归一化、渲染、错误 |
 | `woc/config.py` | `[search]` 六个键 + `search_enabled` / `search_settings` / `search_max_chars` |
 | `woc/llm.py` | `StreamMode.SEARCH` + `#SEARCH:` 标记；`on_mode` 提到 `on_chunk` 之前 |
 | `woc/prompts.py` | `SEARCH_HINT`（只在使用时拼） |
 | `woc/cli/chat.py` | `--search`、`#SEARCH:` 回合推进、`:search` 命令、搜索失败降级 |
-| `tests/test_search.py` | **新增** 41 个离线用例（端点/渲染/降级/chat 回合/wocc 命令/启动路径） |
+| `tests/test_search.py` | **新增**离线用例（端点/渲染/降级/chat 回合/wocc 命令/启动路径） |
 | `install.py` | `CONFIG_TEMPLATE` + 合并逻辑：安装时只补缺失的配置项（§8.1） |
 
 一处顺带修好的旧问题：`on_mode` 之前晚于 `on_chunk`，导致 `#STEP:` 的首段命令
 没有按命令上色（单轮/loop 的 `on_chunk` 里读的是还没更新的 `state["mode"]`）。
-改成先报模式再吐字，顺带让 chat 能在正文上屏前压掉 `#SEARCH:`。
+先报模式再吐字，顺带让 chat 能在正文上屏前压掉 `#SEARCH:`。
 
 ---
 
-### 8.1 第二轮（同日）：默认自动、静默、进 wocc 与安装器
+### 8.1 默认自动、静默、进 wocc 与安装器
 
 | 改动 | 决定与理由 |
 |---|---|
@@ -202,15 +201,15 @@ summary: ...
 不做"每问必搜"：固定 +1 请求与 +0.5s 延迟，而大多数问题不需要；`#SEARCH:` 把决定权
 交给模型，`max_searches=1` 兜住滥用。人工 `:search` 仍然是一条命令一次搜索。
 
-### 8.2 回归（同日）：`#SEARCH:` 单独成块导致"搜索词为空"
+### 8.2 `#SEARCH:` 单独成块会导致搜索词为空
 
-**现象**：`woc -c --search "current version of genshin impact"` 稳定报
+**失败形态**：`woc -c --search "current version of genshin impact"` 报
 `搜索失败，已让模型改用自有知识: 搜索词为空`，模型只能改用自有知识回答。
 
 **根因**：chat 用 `on_chunk` 收到的片段拼出文本再解析 `#SEARCH:`。`StreamFilter`
 会把标记本身吃掉、只把标记之后的内容交给 `on_chunk`；当模型把 `#SEARCH:` 作为
 单独一块吐出来时（真实 SSE 很常见），拼接结果就是 `" current version ..."`，
-`_split_search()` 找不到标记 → 空搜索词。之前的单测把整段当一块塞进去，所以没抓到。
+`_split_search()` 找不到标记 → 空搜索词。把整段当一块塞进去的单测抓不到这个形态。
 
 **修复**：
 
@@ -225,9 +224,9 @@ summary: ...
 **教训**：任何"以标记开头"的解析都必须基于过滤器累积的完整文本；`on_chunk` 是
 给人看的流，不是事实来源。
 
-### 8.3 回归（同日）：`:search` 搜完还要用户补一句
+### 8.3 `:search` 搜完要有人回答
 
-**现象**：`[user] :search gitea最新版本` → 提示"已加入上下文" → 用户得再打
+**失败形态**：`[user] :search gitea最新版本` → 提示"已加入上下文" → 用户得再打
 "go ahead"，模型才回答。搜索只是往历史里塞了数据，没人告诉模型"现在该答"。
 
 **修复**：`search_command()` 返回"结果是否已进上下文"，调用方拿到 True 就立刻
@@ -242,19 +241,17 @@ summary: ...
 **代价**：`:search` 从 1 次请求变成 2 次（搜索 + 回答）。这是它应有的语义 ——
 用户输入的就是一个问题，不是"把资料记下来"。
 
-### 8.4 收尾（同日）：来源行、会话内开关、配置模板一致性
+### 8.4 来源行、会话内开关、配置模板一致性
 
 | 改动 | 理由 |
 |---|---|
 | 回答后一行来源 | 静默搜索的代价是"看不出答案是否联网"。加一行 `[n] 域名`（本地映射，0 请求），把可审计性补回来；命中列表仍然只在 debug 里 |
-| `:search off / on` | 之前关自主搜索必须重启或改配置；改成会话内切换，改 system prompt 里的 hint，代价是前缀缓存重建一次 |
+| `:search off / on` | 自主搜索要能不开重启就关，所以会话内切换，改 system prompt 里的 hint，代价是前缀缓存重建一次 |
 | 配置模板一致性测试 | `CONFIG_TEMPLATE` 与 `config.py` 默认值是两份事实，靠人工纪律迟早漂移。`tests/test_install.py` 现在按集合比对键、按值比对默认值：少一个键、多一个键、值不同都会红 |
 
-顺带把标题里的 `--search` 去掉了 —— 它早就是默认值，不该再出现在名字里。
+### 8.5 `[search] query_by_llm`：检索词由谁决定
 
-### 8.5 `[search] query_by_llm`：检索词由谁决定（2026-11-03）
-
-**现象**：`:search 帮我看看 quic 和 http3 现在到底什么关系` 把整句当 query。
+**动机**：`:search 帮我看看 quic 和 http3 现在到底什么关系` 会把整句当 query。
 搜索引擎对这种长问句召回明显差；而留空 `:search` 只会提示用法，等于把「该搜什么」甩回给用户。
 
 **改动**：新增 `[search] query_by_llm`（默认 `true`，env `WOC_SEARCH_QUERY_BY_LLM`）。`true` 时用**一次小请求**（`QUERY_PROMPT`，显式关 thinking）把原话 + 最近几轮对话（user / assistant 各计，上限 4 条 × 240 字）折成 2–10 词检索词；换了词先打一行 `检索词: <关键词>（原话: ...）`。
@@ -268,17 +265,16 @@ summary: ...
 | 只有留空才允许推断 | 显式给了词就别自作聪明；`false` 时留空只提示用法 |
 | 不动稳定前缀 | 检索词是一次性运行时数据，进 messages，不进 system prompt，缓存不重建 |
 
-**上下文（2026-11-03 修）**：第一版只取 `role == "user"` 并跳过搜索结果块，于是在 `wocc` 里第二句追问会丢主语 —— `:search ...` 这一行从不进 messages，搜索回合之后 user 角色只剩结果块（被跳过），实体名只出现在 assistant 的回答里；实测 `:search current version of Vercel cli` 之后再问 `:search when will this software be updated in next?`，折出来的是 `software next update release schedule`。现在 `_recent_context()` 同时取 user 与 assistant，把结果块折成一行 `搜索过: <query>`（追问几乎总是延续上一次检索），`QUERY_PROMPT` 第 5 条要求把「this software / 它 / 这个」解引用成前面出现过的具体名字，不许放宽成泛词。测试 `RecentContextTest`（6 例）。
+**为什么同时取 user 与 assistant 历史**：只取 `role == "user"` 并跳过搜索结果块时，`wocc` 里第二句追问会丢主语 —— `:search ...` 这一行从不进 messages，搜索回合之后 user 角色只剩结果块（被跳过），实体名只出现在 assistant 的回答里；`:search current version of Vercel cli` 之后再问 `:search when will this software be updated in next?`，会折成 `software next update release schedule`。`_recent_context()` 因此同时取 user 与 assistant，把结果块折成一行 `搜索过: <query>`（追问几乎总是延续上一次检索），`QUERY_PROMPT` 第 5 条要求把「this software / 它 / 这个」解引用成前面出现过的具体名字，不许放宽成泛词。测试 `RecentContextTest`（6 例）。
 
 **成本**：`query_by_llm = true` 时 `:search` 从 2 次请求变 3 次（折词 + 搜索 + 回答）；`false` 保持 2 次。`max_searches` 语义不变 —— 它管的是模型自搜，与人工指令无关。
 
-**测试**：`tests/test_search.py` 的 `DeriveQueryTest` / `QueryByLlmTest` / `QueryByLlmConfigTest`；全量 **266 用例**
-（1 个 live skip）。
+**测试**：`tests/test_search.py` 的 `DeriveQueryTest` / `QueryByLlmTest` / `QueryByLlmConfigTest`。
 
 ## 9. 验收
 
-1. `compileall` + `unittest discover -s tests`：**260 个用例全绿**（1 个 live skip）。
-2. 启动路径：`import woc.cli.chat` 后 `woc.search` 不在 `sys.modules`；模块数仍 157。
+1. `compileall` + `unittest discover -s tests` 全绿（live 用例默认 skip）。
+2. 启动路径：`import woc.cli.chat` 后 `woc.search` 不在 `sys.modules`。
 3. 端到端（本地假 Search 服务）：`woc -c ":search 测试 查询"` 打到
    `/v1/tools/search`，`Authorization` 与 `{query, count, need_content:false}` 正确，
    `WOC_DEBUG=1` 打出 `search: q=... count=5 hits=2 0.00s`。
@@ -286,7 +282,7 @@ summary: ...
 
 ---
 
-## 10. 未做与下一步
+## 10. 范围外
 
 - **`Fetch` 接口**：整页抓取要新增一个出口（模型给 URL → 服务端去抓），默认不开；
   等"搜索摘要不够用"成为真实抱怨再做。
@@ -296,4 +292,4 @@ summary: ...
 - **单轮 `woc --search`**：单轮是"一条命令 + 一次确认"，加搜索等于固定把 1 次请求
   变成 2 次；等有人明确要"查一下再说"的场景。
 - **`localization` 参数**：要传用户 IP，隐私上不划算，不做。
-- **结果数自适应**：现在固定 `count=5`；如果实测发现少，再考虑按 query 复杂度调。
+- **结果数自适应**：固定 `count=5`；如果实际使用中不够，再考虑按 query 复杂度调。
