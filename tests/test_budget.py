@@ -101,7 +101,7 @@ class DebugTest(unittest.TestCase):
         self.assertIn("completion=20", line)
 
     def test_usage_line_without_usage(self):
-        self.assertIn("未返回", debug.usage_line(None))
+        self.assertIn("not returned by the server", debug.usage_line(None))
 
 
 class ConfigIntegrationTest(unittest.TestCase):

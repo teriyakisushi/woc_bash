@@ -1,112 +1,131 @@
 # AGENTS.md
 
-给在本仓库里工作的 AI agent 的说明。人类请看 [README.md](README.md)；
-设计取舍与踩过的坑见 `docs/DESIGN-agentic-loop.md`（`docs/HANDOFF-*.md` 是本地的，
-已 gitignore）。总图见 `docs/ARCHITECTURE.md`：七条不变量、三道边界、依赖方向、
-以及"改哪里先看哪里"的速查表 —— 动手前先扫一眼那张表。
+Notes for AI agents working in this repository. Humans should read [README.md](README.md);
+design trade-offs and hard-won lessons live in `docs/DESIGN-agentic-loop.md` (`docs/HANDOFF-*.md`
+are local and gitignored). For the big picture see `docs/ARCHITECTURE.md`: seven invariants,
+three boundaries, dependency direction, and a "where to look before changing what" cheat sheet —
+skim that table before touching code.
 
-## 项目一句话
+## One sentence
 
-`woc` 把自然语言变成 shell 命令：`woc`（单轮）、`wocc`（多轮 + 可选 agentic loop）、
-`woc -c` / `woc_chat`（聊天）。纯 Python 3.10+ 标准库，无第三方依赖。
+`woc` turns natural language into shell commands: `woc` (single turn), `wocc` (multi-turn +
+optional agentic loop), `woc -c` / `woc_chat` (chat). Pure Python 3.10+ standard library, no
+third-party dependencies.
 
-## 硬约束（改代码前必读）
+## Hard constraints (read before changing code)
 
-1. **零依赖**：只用标准库。不要引入 PyYAML/requests 之类。
-2. **单轮不可循环**：`woc` 用 `os.execvp` 交出进程（`woc/cli/single.py`），loop 只做在 `wocc`。
-3. **模型输出是单行命令**：`sanitize()` 只取第一条有效行，多行会被静默截断；
-   工具调用/XML 残留（DSML、`<exec_result>`、`</br>`）会被拒绝，不会执行。
-4. **人工确认是边界**：每条命令执行前必须有一次确认。loop 只把"只读单命令"在
-   `auto_safe=true` 时免确认，其余仍然逐条确认。非终端输入没有确认可言：
-   `woc` 走管道模式（只问答、不执行），`wocc` / `woc -c` 直接拒绝启动。
-5. **前缀缓存**：稳定段（SYSTEM_PROMPT / MULTI_TURN_HINT(+LOOP_HINT) / `<templates>` /
-   `<environment>`）在一个会话内必须逐字节不变。不要往里面塞时间、git 状态、实时负载。
-6. **模板只是文本**：`<templates>` 里的命令与用户手输的命令同权，必须同样过危险检查。
-7. **历史格式会传染**：assistant 历史里的 `#CHAT:` / `#STEP:` 标记不能剥掉
-   （`docs/DESIGN §8.1`）。loop 开启后是“粘性续步”：出现过 `#STEP:` 的回合，
-   裸命令也继续，只有 `#CHAT:` / `#ERROR:` 结束。
-8. **搜索不进默认路径**：`woc/search.py` 只在真正搜索时延迟导入（`woc -c` 的
-   `#SEARCH:` / `:search`），默认启动路径不许加载它；搜索结果注入在 messages
-   末尾，不进稳定前缀；命中列表只在 `WOC_DEBUG=1` 时打印，但**回答后的来源行
-   必须始终打印**（静默的是过程，不是可审计性）。
+1. **Zero dependencies**: standard library only. Do not add PyYAML/requests and friends.
+2. **Single turn cannot loop**: `woc` hands the process over with `os.execvp`
+   (`woc/cli/single.py`); the loop exists only in `wocc`.
+3. **Model output is a single-line command**: `sanitize()` keeps only the first valid line and
+   silently drops the rest; tool-call/XML residue (DSML, `<exec_result>`, `</br>`) is rejected,
+   never executed.
+4. **Human confirmation is the boundary**: every command needs one confirmation before it runs.
+   The loop only skips it for a "read-only single command" when `auto_safe=true`; everything else
+   is still confirmed one by one. Non-tty input has no confirmation to give: `woc` falls into pipe
+   mode (answers only, never executes), `wocc` / `woc -c` refuse to start.
+5. **Prefix cache**: the stable segments (SYSTEM_PROMPT / MULTI_TURN_HINT(+LOOP_HINT) /
+   `<templates>` / `<environment>`) must stay byte-identical within a session. Never put time,
+   git state, or live load in there.
+6. **Templates are just text**: commands inside `<templates>` have the same standing as typed
+   commands and must pass the same danger checks.
+7. **History format is contagious**: the `#CHAT:` / `#STEP:` markers in assistant history must not
+   be stripped (`docs/DESIGN §8.1`). Once the loop is on, steps are "sticky": a turn that ever
+   produced `#STEP:` keeps taking bare commands, and only `#CHAT:` / `#ERROR:` end it.
+8. **Search stays off the default path**: `woc/search.py` is imported lazily, only when a search
+   really happens (`#SEARCH:` / `:search` in `woc -c`); the default startup path must not load
+   it. Search results are appended at the end of messages, never into the stable prefix; the hit
+   list is printed only under `WOC_DEBUG=1`, but **the sources line after an answer must always be
+   printed** (the process may be quiet, auditability may not).
 
-## 常用命令
+## Common commands
 
 ```bash
-python3 woc.py "查看当前目录下最大的 3 个文件"   # 单轮（会 execvp，别在测试里直接跑）
-python3 wocc.py --loop                          # 多轮 + agentic loop
-python3 woc.py --templates                      # 模板索引与两层注入
-python3 woc.py --check-templates                # 模板自检（应 0 error / 0 warning）
-WOC_DEBUG=1 python3 woc.py "..."                # 观测 usage/缓存/前缀规模（stderr）
+python3 woc.py "list the 3 biggest files here"   # single turn (execvp — do not run directly in tests)
+python3 wocc.py --loop                           # multi-turn + agentic loop
+python3 woc.py --templates                       # template index and two-layer injection
+python3 woc.py --check-templates                 # template self-check (should be 0 error / 0 warning)
+WOC_DEBUG=1 python3 woc.py "..."                 # observe usage/cache/prefix size (stderr)
 
-python3 -m compileall -q woc tests              # 语法
-python3 -m unittest discover -s tests           # 离线回归（330+ 个用例，1 个 live skip，~4s；其中 3s 是 pty 编辑器测试）
-WOC_LIVE_TEST=1 python3 -m unittest discover -s tests   # 真调 API，默认跳过，会产生费用
+python3 -m compileall -q woc tests install.py   # syntax
+python3 -m unittest discover -s tests           # offline regression (353 cases, 1 live skip, ~4s; ~3s of that is the pty editor test)
+WOC_LIVE_TEST=1 python3 -m unittest discover -s tests   # real API calls, skipped by default, costs money
 ```
 
-CI 在 `.github/workflows/test.yml`，Python 3.10 / 3.13 跑同样两项检查。
+CI lives in `.github/workflows/test.yml` and runs the same two checks on Python 3.10 / 3.13.
 
-## 代码地图
+## Code map
 
-| 文件 | 职责 |
+| File | Responsibility |
 |---|---|
-| `woc/loop.py` | agentic loop：`risk_tier`、`#STEP:` 粘性状态机、语法预检、输出折叠、`:more` |
-| `woc/cli/multi.py` | `wocc` 会话循环（用户输入、`:q` / `:more` / `:last`） |
-| `woc/cli/single.py` | 单轮 `woc`（确认后 `os.execvp`） |
-| `woc/cli/chat.py` | `woc -c` 聊天（Markdown 渲染，SSE 增量按安全前缀逐块上屏） |
-| `woc/markdown.py` | 终端 Markdown 渲染：`render_markdown()` 一次性、`MarkdownStream` 流式 |
-| `woc/cli/completion.py` | `--completion bash\|zsh` 补全脚本生成 |
-| `woc/context.py` | 模板两层注入、`<environment>`、目录快照、`messages_prefix()` |
-| `woc/llm.py` | SSE 流式 + `StreamFilter`（`#CHAT:` / `#STEP:` 识别） |
-| `woc/sanitize.py` | 命令清洗、DSML 剥离、工具调用守卫、root-shell 判定 |
-| `woc/gate.py` | 结构化危险判定：命令位置、包装器、递归、保守回退 |
-| `woc/exec.py` | 命令执行、`bash -n` 语法预检、sudo/pty 捕获、`format_exec_result` |
-| `woc/ui.py` | `Spinner`：等待模型/执行命令的一行式 loading（仅 tty） |
-| `woc/pipe.py` | 管道模式：stdin 当数据、只问答不执行；二进制拒绝、头尾截断 |
-| `woc/search.py` | 网页搜索：Search API 调用、结果渲染与字符预算（仅 `woc -c`） |
-| `woc/budget.py` | 预算换算：context / output / input 三者互相约束 |
-| `woc/session.py` | `wocc` 会话落盘/恢复：只存对话、脱敏、限长、0600 |
-| `woc/debug.py` | `WOC_DEBUG=1` 观测：usage、前缀、输入规模、loop 步（只写 stderr） |
-| `woc/config.py` | 分段配置 + 环境变量优先 |
-| `woc/colors.py` | 自绘行编辑器 + 彩色输出（**改动风险最高**）；先跑 `tests/test_colors.py` |
-| `woc/fs.py` | `woc-fs`：文件读写 `read` / `write` / `edit`（独立命令，不进 loop） |
-| `compile.py` | 安装器（命令改名、全局模板、卸载） |
+| `woc/loop.py` | agentic loop: `risk_tier`, `#STEP:` sticky state machine, syntax pre-check, output folding, `:more` |
+| `woc/cli/multi.py` | `wocc` session loop (user input, `:q` / `:more` / `:last`) |
+| `woc/cli/single.py` | single-turn `woc` (`os.execvp` after confirmation) |
+| `woc/cli/chat.py` | `woc -c` chat (Markdown rendering, SSE deltas rendered by safe prefix) |
+| `woc/markdown.py` | terminal Markdown rendering: one-shot `render_markdown()` and streaming `MarkdownStream` |
+| `woc/cli/completion.py` | `--completion bash\|zsh` script generation |
+| `woc/context.py` | two-layer template injection, `<environment>`, directory snapshot, `messages_prefix()` |
+| `woc/llm.py` | SSE streaming + `StreamFilter` (`#CHAT:` / `#STEP:` detection) |
+| `woc/sanitize.py` | command cleanup, DSML stripping, tool-call guard, root-shell detection |
+| `woc/gate.py` | structured danger checks: command position, wrappers, recursion, conservative fallback |
+| `woc/exec.py` | command execution, `bash -n` syntax pre-check, sudo/pty capture, `format_exec_result` |
+| `woc/ui.py` | `Spinner`: one-line loading while waiting for the model / running a command (tty only) |
+| `woc/pipe.py` | pipe mode: stdin as data, answers only; binary rejection, head/tail truncation |
+| `woc/search.py` | web search: Search API call, result rendering and character budget (`woc -c` only) |
+| `woc/budget.py` | budget math: context / output / input constrain each other |
+| `woc/session.py` | `wocc` session persist/restore: conversation only, redacted, size-capped, 0600 |
+| `woc/debug.py` | `WOC_DEBUG=1` observation: usage, prefix, input size, loop steps (stderr only) |
+| `woc/config.py` | sectioned config with environment-variable precedence |
+| `woc/colors.py` | hand-rolled line editor + colored output (**highest change risk**); run `tests/test_colors.py` first |
+| `woc/fs.py` | `woc-fs`: file read/write `read` / `write` / `edit` (standalone command, not in the loop) |
+| `install.py` | installer (command renaming, global templates, uninstall) |
 
-## 代码风格
+## Code style
 
-- 文档与注释用中文，标识符用英文。
-- 日志前缀统一走 `[prefix].alias`，**不要硬编码 `[woc]`**。
-- 改安全逻辑（`woc/gate.py` 的 `is_dangerous` / `is_root_shell` / `risk_tier`）必须同步
-  `tests/test_gate.py` 的 `GateTest`。
-- 新增配置项放在 `woc/config.py` 对应小节，并支持环境变量覆盖；同时更新
-  `compile.py` 的 `CONFIG_TEMPLATE`（`tests/test_compile.py` 会比对两边：
-  少一个键、多一个键、值不同都会红）。
-- 不要为了少按一次回车放宽 `risk_tier` 的白名单。
+- Documentation and comments are in Chinese; identifiers are English.
+- The log prefix always comes from `[prefix].alias`; **never hardcode `[woc]`**.
+- Changing security logic (`is_dangerous` / `is_root_shell` / `risk_tier` in `woc/gate.py`)
+  requires updating `GateTest` in `tests/test_gate.py`.
+- New config items go into the matching section of `woc/config.py` and must support an
+  environment-variable override; also update `CONFIG_TEMPLATE` in `install.py`
+  (`tests/test_install.py` compares both sides: a missing key, an extra key, or a different
+  value all fail).
+- **User-visible copy is English only**: every line we print to the terminal or feed back to the
+  model (help, prompts, hints, errors, notes) is written as the final English string at the call
+  site — no translation layer, no language switch. `tests/test_output_text.py` pins the main
+  entry points.
+- Do not loosen the `risk_tier` whitelist just to save one Enter press.
 
-## 提交约定
+## Commit conventions
 
-- 信息用 `feat:` / `fix:` / `docs:` / `test:` + 中文摘要，正文写"为什么"。
-- 提交前必须：`compileall` + `unittest discover -s tests` 全绿。
-- 临时脚本用 `_` 前缀，跑完删除；不要提交 `_*.py` / `_*.txt`。
+- Use `feat:` / `fix:` / `docs:` / `test:` plus a Chinese summary; the body explains "why".
+- Before committing: `compileall` + `unittest discover -s tests` must be green.
+- Temporary scripts get a `_` prefix and are deleted afterwards; never commit `_*.py` / `_*.txt`.
 
-## 安全提醒
+## Security notes
 
-- `is_dangerous()` 现在是**命令位置**匹配（`woc/gate.py`）：`printf '... reboot ...'`、
-  `grep reboot`、`man reboot` 不再误报；`systemctl reboot`、`sudo reboot`、
-  `bash -c 'reboot'`、`find -exec reboot`、`rm -rf /` 仍然拦截。
-- 它不是沙箱：解析失败、stdin 喂给 shell、或 `awk`/`sed`/`python` 等脚本宿主会回退
-  旧子串规则（fail-closed）；动态拼接、脚本文件内容仍可能绕过。
-- `is_root_shell()` 有刻意缺口：`sudo -u root bash` 抓不到。
-- `risk_tier()` 在 `safe` 之前还有一层参数复核（`read_only_reason()`，`woc/loop.py:87`）：
-  `cat|head|tail|grep` 读 `/proc`、`/sys`、`environ`，以及 `ps` 的 BSD `e` 旗标
-  （`ps e`、`ps auxe`）一律降到 `confirm`。往 `READ_ONLY` 加命令前先想清楚：
-  它会不会把别的进程的环境变量打出来。
-- `redact_secrets()`（`woc/exec.py:110`）按**字段名里的关键词**匹配
-  （`*SECRET*`、`*TOKEN*`、`AWS_*`、`*PASSWORD*`、`Environment` 行）以及凭据形状
-  （`Bearer ...`、PEM 私钥块）。裸 token（没有字段名）仍不覆盖 —— 没有判据，
-  只能靠上面那条参数复核不让它被执行。
-- `bash -n` 语法预检只解析、不执行；它挡的是脏字符/拼写错误，不是安全边界。
-- 需要 sudo 密码且无 ticket 时，`wocc` 前台执行且**不回灌输出**（防止 root 可读内容进 prompt）。
-- 模型偶尔会把中文回答当成命令（漏 `#CHAT:`）；已有 exit 127 提示，不要静默吞掉。
-- `wocc` 默认把会话写到 `$XDG_STATE_HOME/woc/sessions/last.json`（脱敏后，0600）；
-  改这段必须同步 `tests/test_session.py`，并且不要往项目目录里写。
+- `is_dangerous()` now matches on **command position** (`woc/gate.py`): `printf '... reboot ...'`,
+  `grep reboot`, `man reboot` no longer trip it; `systemctl reboot`, `sudo reboot`,
+  `bash -c 'reboot'`, `find -exec reboot`, `rm -rf /` are still blocked.
+- It is not a sandbox: when parsing fails, input is piped to a shell, or a script host such as
+  `awk`/`sed`/`python` is involved, it falls back to the old substring rules (fail-closed);
+  dynamic assembly and script file contents can still slip through.
+- `is_root_shell()` has a deliberate hole: `sudo -u root bash` is not caught.
+- `risk_tier()` applies an extra argument review before saying `safe` (`read_only_reason()`,
+  `woc/loop.py:87`): `cat|head|tail|grep` reading `/proc`, `/sys`, `environ`, and `ps` with the
+  BSD `e` flag (`ps e`, `ps auxe`) all drop to `confirm`. Before adding a command to
+  `READ_ONLY`, think it through: could it print another process's environment?
+- `redact_secrets()` (`woc/exec.py:110`) matches on **keywords in field names** (`*SECRET*`,
+  `*TOKEN*`, `AWS_*`, `*PASSWORD*`, `Environment` lines) and on credential shapes
+  (`Bearer ...`, PEM private-key blocks). Bare tokens (no field name) are still not covered —
+  there is no signal to match on, which is why the argument review above keeps them from being
+  executed at all.
+- `bash -n` syntax pre-check only parses, never executes; it catches garbage characters and
+  typos, and is not a security boundary.
+- When sudo needs a password and there is no ticket, `wocc` runs in the foreground and **does not
+  feed the output back** (so root-readable content cannot reach the prompt).
+- The model occasionally treats a Chinese answer as a command (missing `#CHAT:`); there is an
+  exit-127 hint for that — do not swallow it silently.
+- `wocc` persists sessions to `$XDG_STATE_HOME/woc/sessions/last.json` by default (redacted, 0600);
+  changes there must update `tests/test_session.py`, and nothing may be written into the project
+  directory.

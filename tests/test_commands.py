@@ -56,7 +56,7 @@ class StepsTest(unittest.TestCase):
         err = io.StringIO()
         with redirect_stderr(err):
             self.assertFalse(L.show_steps("woc"))
-        self.assertIn("还没有执行过", err.getvalue())
+        self.assertIn("no command has been run", err.getvalue())
 
     def test_lists_all_statuses(self):
         L._STEPS.extend([
@@ -69,11 +69,11 @@ class StepsTest(unittest.TestCase):
         with redirect_stderr(err):
             self.assertTrue(L.show_steps("woc"))
         text = err.getvalue()
-        self.assertIn("本回合 4 步", text)
+        self.assertIn("this turn took 4 steps", text)
         self.assertIn("1. [0  0.12s] ls", text)
-        self.assertIn("2. [跳过] cat x", text)
-        self.assertIn("3. [拒绝] rm -rf /", text)
-        self.assertIn("4. [语法错误] echo (", text)
+        self.assertIn("2. [skip] cat x", text)
+        self.assertIn("3. [deny] rm -rf /", text)
+        self.assertIn("4. [syntax error] echo (", text)
 
 
 class ExplainTest(unittest.TestCase):
@@ -88,7 +88,7 @@ class ExplainTest(unittest.TestCase):
         err = io.StringIO()
         with redirect_stderr(err):
             self.assertFalse(L.explain_last("woc", CFG))
-        self.assertIn("还没有执行过", err.getvalue())
+        self.assertIn("no command has been run", err.getvalue())
 
     def test_sends_command_output_and_exit_code(self):
         L._LAST.update(command="du -sh /var", output="1.2G /var\n",
@@ -137,7 +137,7 @@ class AgainTest(unittest.TestCase):
         err = io.StringIO()
         with redirect_stderr(err):
             self.assertFalse(L.rerun_last([], "woc", CFG))
-        self.assertIn("还没有执行过", err.getvalue())
+        self.assertIn("no command has been run", err.getvalue())
 
     def test_denied_command_is_not_executed(self):
         L._LAST.update(command="rm -rf /", output="", stderr="", code=0)
@@ -169,7 +169,7 @@ class FoldTest(unittest.TestCase):
         return buf.getvalue()
 
     def test_limit_triggers_folding(self):
-        self.assertIn("已折叠", self.output(5))
+        self.assertIn("lines folded", self.output(5))
 
     def test_zero_disables_folding(self):
-        self.assertNotIn("已折叠", self.output(0))
+        self.assertNotIn("lines folded", self.output(0))

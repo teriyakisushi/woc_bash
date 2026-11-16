@@ -107,10 +107,10 @@ def read_only_reason(cmd):
             if arg.startswith("-"):
                 letters = arg.lstrip("-")
                 if "e" in letters and any(ch in letters for ch in _PS_BSD_ENV_NEIGHBOURS):
-                    return "ps 的 e 旗标会打印进程环境变量"
+                    return "the e flag of ps prints process environment variables"
                 continue
             if "e" in arg:
-                return "ps 的 e 旗标会打印进程环境变量"
+                return "the e flag of ps prints process environment variables"
         return None
 
     if head in _CONTENT_READERS:
@@ -118,7 +118,7 @@ def read_only_reason(cmd):
             if arg.startswith("-"):
                 continue
             if _ENV_PATH_RE.search(arg):
-                return "读取 /proc、/sys 或 environ（进程环境变量）"
+                return "reads /proc, /sys or environ (process environment variables)"
     return None
 
 
@@ -164,7 +164,7 @@ def _show_command(alias, cmd):
     width = max(40, columns - 4)
     if len(cmd) <= width:
         return
-    eprint(f"[{alias}] 完整命令：", C.GRAY)
+    eprint(f"[{alias}] full command:", C.GRAY)
     for line in textwrap.wrap(cmd, width=width,
                               subsequent_indent="    ",
                               break_long_words=True,
@@ -177,13 +177,13 @@ def _confirm(alias):
 
     只认这几个键：方向键和功能键的首字节是 ESC，不能被当成“执行”。
     """
-    eprint(f"[{alias}] Enter/y 执行 · n 跳过 · e 编辑 · Ctrl+C 取消", C.GREEN)
+    eprint(f"[{alias}] Enter/y run · n skip · e edit · Ctrl+C cancel", C.GREEN)
     hinted = False
     while True:
         try:
             key = read_key()
         except (KeyboardInterrupt, EOFError):
-            eprint(f"\n[{alias}] 会话结束", C.GREEN)
+            eprint(f"\n[{alias}] session ended", C.GREEN)
             raise SessionEnd()
         key = (key or "").strip().lower()
         if key in ("", "y", "yes"):
@@ -193,8 +193,7 @@ def _confirm(alias):
         if key in ("e", "edit"):
             return "edit"
         if not hinted:
-            eprint(f"[{alias}] 只认 Enter/y · n · e，其它键已忽略",
-                   C.YELLOW)
+            eprint(f"[{alias}] only Enter/y · n · e are accepted; other keys were ignored", C.YELLOW)
             hinted = True
 
 
@@ -206,7 +205,7 @@ def _print_output(out, err, code, alias, limit=FOLD_LINES):
         if limit > 0 and code == 0 and len(lines) > limit:
             hidden = len(lines) - FOLD_HEAD - FOLD_TAIL
             sys.stdout.write("\n".join(lines[:FOLD_HEAD]) + "\n")
-            sys.stdout.write(f"… 已折叠 {hidden} 行（输入 :more 展开全文）\n")
+            sys.stdout.write(f"… {hidden} lines folded (type :more to expand)\n")
             sys.stdout.write("\n".join(lines[-FOLD_TAIL:]) + "\n")
             folded = True
         else:
@@ -254,17 +253,18 @@ def restore_last(data):
 def show_steps(alias):
     """打印本回合的步骤审计（`:steps`）。返回是否有内容。"""
     if not _STEPS:
-        eprint(f"[{alias}] 本回合还没有执行过命令", C.YELLOW)
+        eprint(f"[{alias}] no command has been run in this turn", C.YELLOW)
         return False
-    eprint(f"[{alias}] 本回合 {len(_STEPS)} 步：", C.GREEN, C.BOLD)
+    eprint(f"[{alias}] this turn took {len(_STEPS)} steps:",
+           C.GREEN, C.BOLD)
     for item in _STEPS:
         status = item["status"]
         if status == "run":
             label = "%s  %.2fs" % (item.get("code", "?"),
                                     item.get("ms", 0) / 1000.0)
         else:
-            label = {"skip": "跳过", "deny": "拒绝",
-                     "syntax": "语法错误"}.get(status, status)
+            label = {"skip": "skip", "deny": "deny",
+                     "syntax": "syntax error"}.get(status, status)
         eprint(f"  {item['step']}. [{label}] {item['cmd'][:140]}", C.GRAY)
     return True
 
@@ -276,17 +276,17 @@ def explain_last(alias, cfg):
     """解释上一条命令与输出（`:explain`）。只读请求，不改变会话历史。"""
     command = _LAST["command"]
     if not command:
-        eprint(f"[{alias}] 还没有执行过命令", C.YELLOW)
+        eprint(f"[{alias}] no command has been run yet", C.YELLOW)
         return False
-    stdout = _LAST["output"][:EXPLAIN_OUTPUT_CHARS] or "(无 stdout)"
-    stderr = _LAST["stderr"][:EXPLAIN_OUTPUT_CHARS] or "(无 stderr)"
+    stdout = _LAST["output"][:EXPLAIN_OUTPUT_CHARS] or "(no stdout)"
+    stderr = _LAST["stderr"][:EXPLAIN_OUTPUT_CHARS] or "(no stderr)"
     block = (
         "<command>\n%s\n</command>\n"
         "<exit_code>%s</exit_code>\n"
         "<stdout>\n%s\n</stdout>\n"
         "<stderr>\n%s\n</stderr>\n\n"
-        "请解释这条命令做了什么，以及输出说明了什么。"
         % (command, _LAST["code"], stdout, stderr)
+        + "Explain what this command does and what its output shows."
     )
     messages = [
         {"role": "system",
@@ -323,24 +323,25 @@ def rerun_last(messages, alias, cfg, capture=False):
     """重跑上一条命令（`:again`）：仍然过 gate + 人工确认，并写回会话历史。"""
     cmd = _LAST["command"]
     if not cmd:
-        eprint(f"[{alias}] 还没有执行过命令", C.YELLOW)
+        eprint(f"[{alias}] no command has been run yet", C.YELLOW)
         return False
     if is_root_shell(cmd) or is_dangerous(cmd):
-        eprint(f"[{alias}] 该命令现在会被安全策略拒绝，未执行：", C.YELLOW, C.BOLD)
+        eprint(f"[{alias}] this command is now denied by the safety policy; not executed:", C.YELLOW, C.BOLD)
         eprint(f"  {cmd}", C.YELLOW)
         return False
     if syntax_check_enabled(cfg):
         error = syntax_error(cmd)
         if error:
-            eprint(f"[{alias}] 命令语法错误，未执行：", C.YELLOW, C.BOLD)
+            eprint(f"[{alias}] command has a syntax error; not executed:",
+                   C.YELLOW, C.BOLD)
             eprint(f"  {cmd[:200]}", C.YELLOW)
             return False
 
-    eprint(f"[{alias}] 将重跑：", C.GREEN)
+    eprint(f"[{alias}] rerunning:", C.GREEN)
     eprint(f"  {cmd}", C.CYAN)
     action = _confirm(alias)
     if action == "skip":
-        eprint(f"[{alias}] 已跳过", C.YELLOW)
+        eprint(f"[{alias}] skipped", C.YELLOW)
         return False
     if action == "edit":
         try:
@@ -350,13 +351,14 @@ def rerun_last(messages, alias, cfg, capture=False):
                                            C.YELLOW),
             ).strip()
         except (KeyboardInterrupt, EOFError):
-            eprint(f"\n[{alias}] 已取消", C.YELLOW)
+            eprint(f"\n[{alias}] Cancelled", C.YELLOW)
             return False
         if not edited:
-            eprint(f"[{alias}] 已跳过", C.YELLOW)
+            eprint(f"[{alias}] skipped", C.YELLOW)
             return False
         if is_root_shell(edited) or is_dangerous(edited):
-            eprint(f"[{alias}] 编辑后的命令仍被拒绝，未执行", C.YELLOW, C.BOLD)
+            eprint(f"[{alias}] the edited command is still denied; not executed",
+                   C.YELLOW, C.BOLD)
             return False
         cmd = edited
 
@@ -402,8 +404,8 @@ def _ask(messages, cfg, alias, spinner=False, step=None, max_steps=None):
         spin.stop()
         sys.stdout.write("\n")
         sys.stdout.flush()
-        eprint(f"[{alias}] LLM 调用失败：{exc}", C.RED)
-        eprint(f"[{alias}] 本轮已跳过，可换个说法重试，或 :q 退出", C.YELLOW)
+        eprint(f"[{alias}] LLM call failed: {exc}", C.RED)
+        eprint(f"[{alias}] this turn was skipped; rephrase and retry, or :q to exit", C.YELLOW)
         raise
     finally:
         spin.stop()
@@ -416,30 +418,26 @@ def _execute(cmd, alias, capture, spinner=False, label=""):
     """执行一步，返回 (exec_result 文本, stdout, stderr, exit_code, 是否已回显)。"""
     if needs_privilege(cmd) and not sudo_ticket_valid():
         if not sys.stdin.isatty():
-            eprint(f"[{alias}] 需要 sudo 密码，但当前输入不是终端，已拒绝：",
-                   C.YELLOW, C.BOLD)
+            eprint(f"[{alias}] sudo needs a password, but input is not a terminal; refused:", C.YELLOW, C.BOLD)
             eprint(f"  {cmd}", C.YELLOW)
+            stderr_text = f"sudo needs a password, but {alias} has no terminal input. Run it directly in a terminal, or run sudo -v first and retry."
             block = (
                 "<exec_result>\n"
                 "exit_code: 126\n"
                 "stdout:\n\n"
-                f"stderr:\n需要 sudo 密码，但 {alias} 的输入不是终端。"
-                "请在终端里直接运行，或先 sudo -v 缓存凭证后重试。\n"
+                "stderr:\n" + stderr_text + "\n"
                 "</exec_result>"
             )
             return block, "", "", 126, False
 
         if capture and pty_capture_available():
-            eprint(f"[{alias}] 该命令需要 sudo 权限，正在 pty 中执行并捕获输出"
-                   "（输出会反馈给模型）", C.YELLOW, C.BOLD)
+            eprint(f"[{alias}] this command needs sudo; running it in a pty and capturing output (output is fed back to the model)", C.YELLOW, C.BOLD)
             out, err, code = run_command_capture_pty(cmd)
             return format_exec_result(out, err, code), out, err, code, True
 
         if capture:
-            eprint(f"[{alias}] 找不到 script，无法捕获输出，改为前台执行",
-                   C.YELLOW, C.BOLD)
-        eprint(f"[{alias}] 该命令需要 sudo 权限，将在本终端前台执行"
-               "（输出不会反馈给模型）", C.YELLOW, C.BOLD)
+            eprint(f"[{alias}] cannot find script; running in the foreground instead without capturing output", C.YELLOW, C.BOLD)
+        eprint(f"[{alias}] this command needs sudo; running in the foreground (output is not fed back to the model)", C.YELLOW, C.BOLD)
         code, ferr = run_command_foreground(cmd)
         if ferr:
             eprint(f"[{alias}] {ferr}", C.RED)
@@ -499,9 +497,7 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
         try:
             # run_turn 会先剥 DSML，所以守卫必须看 raw，而不是剥完的 body。
             if has_toolcall(raw) and not text.lstrip().startswith("#CHAT:"):
-                raise CommandGenError(
-                    "模型输出了工具调用/标签格式，已拒绝执行；"
-                    "请只返回一条命令，或 #CHAT: 回答")
+                raise CommandGenError("the model emitted tool-call/tag syntax; not executed. Return only one command, or answer with #CHAT:")
             cmd = sanitize(body)
         except ChatResponse as chat:
             # 历史里**保留** `#CHAT:` 标记：模型会模仿自己上一轮的回复格式，剥掉标记
@@ -517,8 +513,9 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                     "<exec_result>\n"
                     "exit_code: 1\n"
                     "stdout:\n\n"
-                    f"stderr:\n命令生成失败：{exc}\n"
-                    "</exec_result>"
+                    "stderr:\n"
+                    + f"command generation failed: {exc}"
+                    + "\n</exec_result>"
                 ),
             })
             if step_mode or multi_step:
@@ -533,9 +530,8 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
         if is_root_shell(cmd):
             block = _rejected(
                 alias, cmd,
-                "该命令会打开交互式 root shell，已拒绝：",
-                f"命令会打开交互式 root shell，{alias} 无法在其中继续工作；"
-                "请改成具体的非交互命令。",
+                "this command opens an interactive root shell; refused:",
+                f"this command opens an interactive root shell, where {alias} cannot keep working. Use a concrete non-interactive command instead.",
             )
             record["status"] = "deny"
             _STEPS.append(record)
@@ -550,11 +546,11 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
         if tier == "deny":
             record["status"] = "deny"
             _STEPS.append(record)
-            reason = dangerous_reason(cmd) or "命中安全策略"
+            reason = dangerous_reason(cmd) or "matched the safety policy"
             block = _rejected(
                 alias, cmd,
-                f"检测到潜在危险命令（{reason}），已拒绝：",
-                f"命令因安全策略被拒绝：{reason}。请换一种安全写法。",
+                f"potentially dangerous command detected ({reason}); refused:",
+                f"the command was denied by the safety policy: {reason}. Try a safer form.",
             )
             messages.append({"role": "user", "content": block})
             if step_mode or multi_step:
@@ -562,7 +558,7 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
             return
 
         if (step_mode or multi_step) and cmd == last_cmd:
-            eprint(f"[{alias}] 模型连续两次给出同一条命令，已中止", C.YELLOW, C.BOLD)
+            eprint(f"[{alias}] the model sent the same command twice in a row; stopping", C.YELLOW, C.BOLD)
             return
         last_cmd = cmd
 
@@ -572,7 +568,8 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                 detail = "\n".join(error.strip().splitlines()[-2:])[:500]
                 record["status"] = "syntax"
                 _STEPS.append(record)
-                eprint(f"[{alias}] 命令语法错误，未执行：", C.YELLOW, C.BOLD)
+                eprint(f"[{alias}] command has a syntax error; not executed:",
+                       C.YELLOW, C.BOLD)
                 eprint(f"  {cmd[:200]}", C.YELLOW)
                 messages.append({
                     "role": "user",
@@ -581,9 +578,8 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                         "exit_code: 2\n"
                         "stdout:\n\n"
                         "stderr:\n"
-                        f"命令语法错误（bash -n）：{detail}\n"
-                        "请修正为一条合法的单行命令。\n"
-                        "</exec_result>"
+                        + f"command syntax error (bash -n): {detail}\nFix it into one valid single-line command.\n"
+                        + "</exec_result>"
                     ),
                 })
                 if step_mode or multi_step:
@@ -595,7 +591,7 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
             action = _confirm(alias)
             if action == "edit":
                 if not sys.stdin.isatty():
-                    eprint(f"[{alias}] 非交互模式下无法编辑，已跳过", C.YELLOW)
+                    eprint(f"[{alias}] cannot edit in non-interactive mode; skipped", C.YELLOW)
                     action = "skip"
                 else:
                     edited = interactive_input(
@@ -610,8 +606,7 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
                     else:
                         reason = dangerous_reason(edited)
                         if reason or is_root_shell(edited):
-                            eprint(f"[{alias}] 编辑后的命令仍被拒绝"
-                                   f"（{reason or '交互式 root shell'}）",
+                            eprint(f'[{alias}] the edited command is still denied ({reason or "interactive root shell"})',
                                    C.YELLOW, C.BOLD)
                             action = "skip"
                         else:
@@ -622,15 +617,16 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
             if action == "skip":
                 record["status"] = "skip"
                 _STEPS.append(record)
-                eprint(f"[{alias}] 已跳过", C.YELLOW)
+                eprint(f"[{alias}] skipped", C.YELLOW)
                 messages.append({
                     "role": "user",
                     "content": (
                         "<exec_result>\n"
                         "exit_code: 130\n"
                         "stdout:\n\n"
-                        "stderr:\n用户跳过了这条命令。\n"
-                        "</exec_result>"
+                        "stderr:\n"
+                        + "the user skipped this command.\n"
+                        + "</exec_result>"
                     ),
                 })
                 return
@@ -655,8 +651,7 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
         if code == 127 and _CJK_RE.search(cmd):
             # 可观测性：模型偶尔会忘记 #CHAT:，把一段中文回答当成命令。这里不改行为，
             # 只在终端提示一句，方便下次回归时立刻发现（历史格式见 run_turn 的注释）。
-            eprint(f"[{alias}] ⚠️  这条“命令”更像是一段回答（exit 127 且含中文），"
-                   "可能是模型漏了 #CHAT: 标记。", C.YELLOW)
+            eprint(f'[{alias}] ⚠️  this "command" looks like an answer (exit 127 with CJK text); the model probably forgot the #CHAT: marker.', C.YELLOW)
 
         messages.append({"role": "user", "content": result})
         spent += len(result)
@@ -664,9 +659,9 @@ def run_turn(messages, cfg, alias, capture=False, loop_enabled=False):
         if not step_mode and not multi_step:
             return
         if spent > total_chars:
-            eprint(f"[{alias}] 累计输出预算用尽（{total_chars} 字符），停止自动执行",
+            eprint(f"[{alias}] output budget exhausted ({total_chars} chars); stopping automatic execution",
                    C.YELLOW, C.BOLD)
             return
 
     if loop_enabled:
-        eprint(f"[{alias}] 已达到 {max_steps} 步上限，停止自动执行", C.YELLOW, C.BOLD)
+        eprint(f"[{alias}] reached the {max_steps}-step limit; stopping automatic execution", C.YELLOW, C.BOLD)

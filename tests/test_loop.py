@@ -193,7 +193,7 @@ class LoopDriverTest(unittest.TestCase):
             harness.run([{"role": "user", "content": "q"}], loop_cfg=cfg)
         self.assertEqual(harness.calls, 3)
         self.assertEqual(len(harness.executed), 3)
-        self.assertIn("步上限", harness.stderr.getvalue())
+        self.assertIn("step limit", harness.stderr.getvalue())
 
     def test_repeated_command_aborts(self):
         with FakeHarness(["#STEP: ls -l", "#STEP: ls -l"]) as harness:
@@ -254,14 +254,14 @@ class ProseHintTest(unittest.TestCase):
         outputs = {self.PROSE: ("", "bash: line 1: 争议大: command not found", 127)}
         with FakeHarness([self.PROSE], outputs=outputs) as harness:
             harness.run([{"role": "user", "content": "q"}])
-        self.assertIn("漏了 #CHAT: 标记", harness.stderr.getvalue())
+        self.assertIn("forgot the #CHAT: marker", harness.stderr.getvalue())
 
     def test_no_hint_for_english_command(self):
         cmd = "definitely-not-a-command"
         outputs = {cmd: ("", "bash: line 1: command not found", 127)}
         with FakeHarness([cmd], outputs=outputs) as harness:
             harness.run([{"role": "user", "content": "q"}])
-        self.assertNotIn("漏了 #CHAT: 标记", harness.stderr.getvalue())
+        self.assertNotIn("forgot the #CHAT: marker", harness.stderr.getvalue())
 
 
 LIVE_SETS = {
@@ -323,7 +323,7 @@ class OutputFoldTest(unittest.TestCase):
         with FakeHarness([cmd], outputs={cmd: (self.LONG, "", 0)}) as harness:
             harness.run([{"role": "user", "content": "q"}])
         stdout = harness.stdout.getvalue()
-        self.assertIn("已折叠", stdout)
+        self.assertIn("lines folded", stdout)
         self.assertIn("line 0", stdout)
         self.assertIn("line 99", stdout)
         self.assertNotIn("line 50", stdout)
@@ -332,13 +332,13 @@ class OutputFoldTest(unittest.TestCase):
         cmd = "ls"
         with FakeHarness([cmd], outputs={cmd: ("a\nb\n", "", 0)}) as harness:
             harness.run([{"role": "user", "content": "q"}])
-        self.assertNotIn("已折叠", harness.stdout.getvalue())
+        self.assertNotIn("lines folded", harness.stdout.getvalue())
 
     def test_failed_command_never_folded(self):
         cmd = "cat missing"
         with FakeHarness([cmd], outputs={cmd: (self.LONG, "boom\n", 1)}) as harness:
             harness.run([{"role": "user", "content": "q"}])
-        self.assertNotIn("已折叠", harness.stdout.getvalue())
+        self.assertNotIn("lines folded", harness.stdout.getvalue())
 
     def test_expand_last_output(self):
         cmd = "seq 100"
@@ -355,12 +355,12 @@ class DenyReasonTest(unittest.TestCase):
     def test_reason_is_reported(self):
         with FakeHarness(["rm -rf /"]) as harness:
             harness.run([{"role": "user", "content": "q"}])
-        self.assertIn("递归删除根目录", harness.stderr.getvalue())
+        self.assertIn("recursive deletion of the root directory", harness.stderr.getvalue())
 
     def test_reason_goes_back_to_model(self):
         with FakeHarness(["mkfs.ext4 /dev/sda1"]) as harness:
             messages = harness.run([{"role": "user", "content": "q"}])
-        self.assertIn("格式化文件系统", messages[2]["content"])
+        self.assertIn("formatting a filesystem", messages[2]["content"])
 
 
 class StickyLoopTest(unittest.TestCase):
@@ -392,7 +392,7 @@ class StickyLoopTest(unittest.TestCase):
             harness.run([{"role": "user", "content": "q"}], loop_cfg=cfg)
         self.assertEqual(harness.calls, 10)
         self.assertEqual(len(harness.executed), 10)
-        self.assertIn("10 步上限", harness.stderr.getvalue())
+        self.assertIn("10-step limit", harness.stderr.getvalue())
 
 
 class ProtocolGuardTest(unittest.TestCase):
@@ -405,7 +405,7 @@ class ProtocolGuardTest(unittest.TestCase):
             messages = harness.run([{"role": "user", "content": "q"}])
         self.assertEqual(harness.executed, ["ls -l"])
         self.assertEqual(harness.calls, 3)
-        self.assertIn("工具调用", harness.stderr.getvalue())
+        self.assertIn("tool-call", harness.stderr.getvalue())
         self.assertIn("exit_code: 1", messages[4]["content"])
 
     def test_dsml_tag_after_valid_command_is_rejected(self):
@@ -422,7 +422,7 @@ class ProtocolGuardTest(unittest.TestCase):
             messages = harness.run([{"role": "user", "content": "q"}])
         self.assertEqual(harness.executed, ["ls -l"])
         self.assertEqual(harness.calls, 3)
-        self.assertIn("语法错误", harness.stderr.getvalue())
+        self.assertIn("syntax error", harness.stderr.getvalue())
         self.assertIn("exit_code: 2", messages[4]["content"])
 
     def test_syntax_check_can_be_disabled(self):
@@ -470,7 +470,7 @@ class ShowCommandTest(unittest.TestCase):
         cmd = ("git log --oneline --author=someone --since=2026-01-01 "
                "--until=2026-06-01 | head -50")
         text = self.run_show(cmd, columns="40")
-        self.assertIn("完整命令", text)
+        self.assertIn("full command", text)
         lines = [line for line in text.splitlines() if line.strip()]
         self.assertGreater(len(lines), 2)
         for line in lines[1:]:
@@ -499,4 +499,4 @@ class ConfirmTest(unittest.TestCase):
     def test_other_keys_are_ignored_once(self):
         action, text = self.confirm(["x", "q", "y"])
         self.assertEqual(action, "run")
-        self.assertEqual(text.count("其它键已忽略"), 1)
+        self.assertEqual(text.count("other keys were ignored"), 1)

@@ -185,6 +185,12 @@ woc_chat 什么是 systemd？
 逐块吐；一行里遇到标题、围栏、行内代码这类整行形态的构造时，这一行等换行再渲染，
 所以屏幕上不会出现半个 `**` 或反引号。表格要看到整块才知道列宽，会晚一点整块出现。
 
+## 输出语言
+
+终端 UI/log 与回灌给模型的 harness 文本统一是英文，没有语言开关。模型回答的语言
+跟随你的提问 —— prompt 里写的是“跟随用户提问语言”。模板正文是用户自己维护的
+内容，不会被翻译。
+
 ## 安全说明
 
 LLM 输出不应被视为绝对可信。执行命令前请检查命令内容、路径和参数，
@@ -243,13 +249,13 @@ source <(woc --completion zsh)
 删除命令并移除 Shell 配置中的 PATH 初始化：
 
 ```bash
-python3 compile.py --uninstall
+python3 install.py --uninstall
 ```
 
 如需同时删除 `~/.config/woc/config.toml`：
 
 ```bash
-python3 compile.py --uninstall --purge-config
+python3 install.py --uninstall --purge-config
 ```
 
 ## 开发检查

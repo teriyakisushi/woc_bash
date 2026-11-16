@@ -1,4 +1,4 @@
-"""安装器 compile.py 的离线回归。
+"""安装器 install.py 的离线回归。
 
 重点两件事：
 1. `_config_module()`：config.py 里有相对导入（budget / debug），安装器必须按包
@@ -20,9 +20,9 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 
-def load_compile_module():
+def load_install_module():
     spec = importlib.util.spec_from_file_location(
-        "woc_compile_under_test", os.path.join(ROOT, "compile.py"))
+        "woc_install_under_test", os.path.join(ROOT, "install.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -30,13 +30,13 @@ def load_compile_module():
 
 class ConfigModuleTest(unittest.TestCase):
     def test_config_loads_as_package(self):
-        module = load_compile_module()
+        module = load_install_module()
         config = module._config_module()
         self.assertIn("alias", config.PREFIX_DEFAULTS)
         self.assertTrue(callable(config.load_config))
 
     def test_current_prefix_is_sanitized(self):
-        module = load_compile_module()
+        module = load_install_module()
         names = module.current_prefix()
         for key in ("alias", "woc_prefix", "wocc_prefix", "woc_chat_prefix"):
             self.assertIn(key, names)
@@ -45,15 +45,16 @@ class ConfigModuleTest(unittest.TestCase):
 
 class ConfigTemplateTest(unittest.TestCase):
     def setUp(self):
-        self.module = load_compile_module()
+        self.module = load_install_module()
 
     def test_creates_file_when_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"
             self.assertEqual(self.module.merge_config_template(path), -1)
             text = path.read_text(encoding="utf-8")
-        for section in ("[prefix]", "[loop]", "[ui]", "[thinking]", "[pipe]",
-                        "[search]", "[budget]", "[debug]", "[session]"):
+        for section in ("[prefix]", "[loop]", "[ui]", "[thinking]",
+                        "[pipe]", "[search]", "[budget]", "[debug]",
+                        "[session]"):
             self.assertIn(section, text)
         self.assertIn("enabled = true", text.split("[search]")[1].split("[")[0])
 
@@ -92,6 +93,13 @@ class ConfigTemplateTest(unittest.TestCase):
         self.assertEqual(cfg["loop"]["max_steps"], 5)
         self.assertEqual(cfg["budget"]["context_tokens"], 64000)
 
+    def test_merged_file_has_no_language_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            self.module.merge_config_template(path)
+            text = path.read_text(encoding="utf-8")
+        self.assertNotIn("[lang]", text)
+
 
 class ConfigTemplateConsistencyTest(unittest.TestCase):
     """模板必须和 config.py 的默认值一一对应。
@@ -120,7 +128,7 @@ class ConfigTemplateConsistencyTest(unittest.TestCase):
     OPTIONAL = {("pipe", "max_chars")}
 
     def test_template_keys_match_defaults(self):
-        module = load_compile_module()
+        module = load_install_module()
         blocks = {name: {key for key, _line in entries}
                   for name, entries in module._template_sections()}
         expected = {name: set(keys) for name, keys in self.EXPECTED.items()}
@@ -130,7 +138,7 @@ class ConfigTemplateConsistencyTest(unittest.TestCase):
 
     def test_template_values_are_the_defaults(self):
         """模板里的值必须等于内置默认值，否则"补进配置"会悄悄改行为。"""
-        module = load_compile_module()
+        module = load_install_module()
         config = module._config_module()
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"

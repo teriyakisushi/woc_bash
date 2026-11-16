@@ -12,19 +12,19 @@ from ..loop import (SessionEnd, explain_last, expand_last_output,
 from ..prompts import LOOP_HINT, MULTI_TURN_HINT, render_system_prompt
 
 HELP_LINES = (
-    (":q / exit / quit", "结束会话"),
-    (":more / v", "展开上一条命令的完整输出"),
-    (":last", "重看上一条命令"),
-    (":steps", "本回合的步骤审计"),
-    (":explain", "解释上一条命令与输出（只发一次请求，不进历史）"),
-    (":again", "重跑上一条命令（仍需确认）"),
-    (":search [关键词]", "搜索网页并让模型据结果回答（留空按对话推断检索词）"),
-    (":help", "显示这段帮助"),
+    (":q / exit / quit", "end the session"),
+    (":more / v", "expand the full output of the last command"),
+    (":last", "show the last command again"),
+    (":steps", "step audit for this turn"),
+    (":explain", "explain the last command and its output (one request, not added to history)"),
+    (":again", "re-run the last command (still needs confirmation)"),
+    (":search [query]", "search the web and answer from the results (leave blank to infer the query from the chat)"),
+    (":help", "show these commands"),
 )
 
 
 def show_help(alias):
-    eprint(f"[{alias}] 会话内命令：", C.GREEN, C.BOLD)
+    eprint(f"[{alias}] In-session commands:", C.GREEN, C.BOLD)
     for command, desc in HELP_LINES:
         eprint(f"  {command:<16} {desc}", C.GRAY)
 
@@ -35,17 +35,13 @@ def show_sessions(alias, command_name):
     """列出最近保存的会话（`--sessions`）。"""
     items = session.list_sessions()
     if not items:
-        eprint(f"[{alias}] 还没有保存过会话"
-               "（[session] persist 开启后每回合自动保存）", C.YELLOW)
+        eprint(f"[{alias}] no saved sessions yet ([session] persist saves one after each turn)", C.YELLOW)
         return
-    eprint(f"[{alias}] 已保存的会话（最近 {len(items)} 个）：",
-           C.GREEN, C.BOLD)
+    eprint(f"[{alias}] saved sessions (most recent {len(items)}):", C.GREEN, C.BOLD)
     for item in items:
-        eprint(f"  {item['saved_at']}  {item['count']:>3} 条  {item['name']}",
-               C.GRAY)
+        eprint(f'  {item["saved_at"]}  {item["count"]:>3} msgs  {item["name"]}', C.GRAY)
         eprint(f"      {item['cwd']}", C.GRAY)
-    eprint(f"[{alias}] 恢复：{command_name} --resume <会话名>"
-           f"   或   {command_name} --last-session", C.GREEN)
+    eprint(f"[{alias}] restore: {command_name} --resume <session-name>   or   {command_name} --last-session", C.GREEN)
 
 
 def wocc_main(argv):
@@ -71,8 +67,7 @@ def wocc_main(argv):
         show_sessions(alias, name)
         sys.exit(0)
     if resume_name == "":
-        eprint(f"[{alias}] --resume 需要一个会话名；"
-               f"先用 {name} --sessions 查看", C.RED)
+        eprint(f"[{alias}] --resume needs a session name; run {name} --sessions first", C.RED)
         sys.exit(2)
     settings = cfg.get("loop") or {}
     loop_enabled = loop_flag or bool(settings.get("enabled"))
@@ -87,10 +82,8 @@ def wocc_main(argv):
 
     if not sys.stdin.isatty():
         # 非终端时 read_key() 会退化成 input()，管道里的任意一行都会变成“确认”。
-        eprint(f"[{alias}] {name} 需要终端：当前标准输入不是终端，"
-               "无法逐条确认命令，已退出。", C.RED)
-        eprint(f"[{alias}] 想把命令输出当数据提问，用: <命令> | "
-               f"{prefix(cfg, 'woc_prefix')} \"你的问题\"", C.GREEN)
+        eprint(f"[{alias}] {name} needs a terminal: standard input is not a terminal, so commands cannot be confirmed one by one. Exiting.", C.RED)
+        eprint(f'[{alias}] to ask about command output, use: <command> | {prefix(cfg, "woc_prefix")} "your question"', C.GREEN)
         sys.exit(2)
 
     # 会话级稳定前缀：system prompt + 多轮说明（+loop 说明） + template 参考库 + 环境。
@@ -111,19 +104,14 @@ def wocc_main(argv):
                              "content": session.context_note(restored)})
             messages.extend(restored["messages"])
             restore_last(restored.get("last"))
-            eprint(f"[{alias}] 已恢复上次会话："
-                   f"{len(restored['messages'])} 条消息"
-                   f"（{restored.get('saved_at', '时间未知')}）",
+            eprint(f'[{alias}] restored the previous session: {len(restored["messages"])} messages ({restored.get("saved_at", "unknown time")})',
                    C.GREEN, C.BOLD)
         else:
-            eprint(f"[{alias}] 没有可恢复的会话"
-                   "（没保存过，或格式不兼容）", C.YELLOW)
+            eprint(f"[{alias}] no session to restore (never saved, or incompatible format)", C.YELLOW)
 
-    eprint(f"[{alias}] 已进入多轮会话，输入 :q 退出（:help 看会话内命令）",
-           C.GREEN, C.BOLD)
+    eprint(f"[{alias}] multi-turn session started; type :q to exit (:help for commands)", C.GREEN, C.BOLD)
     if loop_enabled:
-        eprint(f"[{alias}] loop 已开启：最多 {max_steps} 步，"
-               f"只读命令免确认: {'是' if auto_safe else '否'}", C.GREEN)
+        eprint(f'[{alias}] loop enabled: up to {max_steps} steps; read-only commands skip confirmation: {"yes" if auto_safe else "no"}', C.GREEN)
 
     pending_input = " ".join(argv) if argv else None
     save_warned = False
@@ -141,13 +129,13 @@ def wocc_main(argv):
                         f"[{alias}] {msg}", C.YELLOW),
                 ).strip()
             except (KeyboardInterrupt, EOFError):
-                eprint(f"\n[{alias}] 会话结束", C.GREEN)
+                eprint(f"\n[{alias}] session ended", C.GREEN)
                 break
 
         if not user_input:
             continue
         if user_input in (":q", "exit", "quit"):
-            eprint(f"[{alias}] 会话结束", C.GREEN)
+            eprint(f"[{alias}] session ended", C.GREEN)
             break
         if user_input in (":help", ":h", "?"):
             show_help(alias)
@@ -157,7 +145,7 @@ def wocc_main(argv):
             continue
         if user_input in (":more", "v"):
             if not expand_last_output():
-                eprint(f"[{alias}] 没有可展开的输出", C.YELLOW)
+                eprint(f"[{alias}] no output to expand", C.YELLOW)
             continue
         if user_input == ":steps":
             show_steps(alias)
@@ -170,7 +158,7 @@ def wocc_main(argv):
             if command:
                 eprint(f"[{alias}] {command}", C.CYAN)
             else:
-                eprint(f"[{alias}] 还没有执行过命令", C.YELLOW)
+                eprint(f"[{alias}] no command has been run yet", C.YELLOW)
             continue
 
         # 人工指定搜索内容：搜到结果就直接接着让模型回答，不再等用户补一句。
@@ -182,7 +170,7 @@ def wocc_main(argv):
             arg = user_input[len(":search"):].strip().lower()
             if arg in ("on", "off"):
                 # wocc 没有"模型自主搜索"，也就没有开关；明说一句，别去搜 "off"。
-                eprint(f"[{alias}] wocc 只支持人工 :search，没有自主搜索开关", C.YELLOW)
+                eprint(f"[{alias}] wocc only supports manual :search; there is no autonomous-search switch", C.YELLOW)
                 continue
             from ..search import search_command      # 延迟导入：默认路径不加载
             sources = search_command(user_input, messages, cfg, alias)
@@ -210,6 +198,5 @@ def wocc_main(argv):
                                  max_chars=store["max_chars"],
                                  last=export_last())
             if not saved and not save_warned:
-                eprint(f"[{alias}] 会话保存失败：{session.session_path()}",
-                       C.YELLOW)
+                eprint(f"[{alias}] failed to save the session: {session.session_path()}", C.YELLOW)
                 save_warned = True

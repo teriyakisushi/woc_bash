@@ -40,11 +40,11 @@ def run_command_foreground(cmd):
     except KeyboardInterrupt:
         return 130, None
     except OSError as exc:
-        return 1, f"执行失败: {exc}"
+        return 1, f"execution failed: {exc}"
 
 
 def format_foreground_result(code, error=None):
-    note = error or "命令在终端前台交互执行，输出未捕获（sudo 密码由用户在终端直接输入）。"
+    note = error or "command ran interactively in the foreground; output was not captured (sudo reads the password directly from the terminal)."
     return (
         "<exec_result>\n"
         f"exit_code: {code}\n"
@@ -149,7 +149,7 @@ def run_command_capture_pty(cmd, max_output=8000):
             stderr=subprocess.STDOUT,
         )
     except OSError as exc:
-        return "", f"启动 pty 失败: {exc}", 1
+        return "", f"failed to start pty: {exc}", 1
 
     chunks = []
     kept = 0
@@ -183,7 +183,7 @@ def run_command_capture_pty(cmd, max_output=8000):
     text = redact_secrets(text)
     if len(text) > max_output:
         text = text[:max_output] + f"\n...[truncated {len(text) - max_output} chars]"
-    return text, "(stdout/stderr 已由 pty 合并)", code
+    return text, "(stdout/stderr were merged by the pty)", code
 
 
 def syntax_error(cmd):
@@ -202,7 +202,7 @@ def syntax_error(cmd):
     if proc.returncode == 0:
         return None
     err = proc.stderr.decode("utf-8", "replace").strip()
-    return err or f"bash -n 退出码 {proc.returncode}"
+    return err or f"bash -n exited with {proc.returncode}"
 
 
 # Execution Commands
@@ -219,11 +219,11 @@ def run_command_capture(cmd, max_output=8000, timeout=120):
         err = proc.stderr.decode("utf-8", "replace")
         code = proc.returncode
     except subprocess.TimeoutExpired:
-        out, err, code = "", f"[woc] 命令超过 {timeout}s 未结束，已终止", 124
+        out, err, code = "", f"command did not finish within {timeout}s; terminated", 124
     except KeyboardInterrupt:
-        out, err, code = "", "[woc] 用户中断 (Ctrl+C)", 130
+        out, err, code = "", "interrupted by user (Ctrl+C)", 130
     except Exception as e:
-        out, err, code = "", f"[woc] 执行失败: {e}", 1
+        out, err, code = "", f"execution failed: {e}", 1
 
     def truncate(s):
         if len(s) <= max_output:

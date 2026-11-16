@@ -1,6 +1,6 @@
 """包门面必须是懒加载的。
 
-`import woc.config` 不该拉起 colors（termios/tty）、llm、context —— compile.py
+`import woc.config` 不该拉起 colors（termios/tty）、llm、context —— install.py
 这类"只读配置"的工具依赖这一点，启动路径也依赖它。
 """
 

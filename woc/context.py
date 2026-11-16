@@ -53,13 +53,13 @@ ASSIGN_ONLY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=(?:[^;|&]*|\$\([^)]*\)|\"[
 # 这里只做提示，不阻断。
 PORTABILITY_NOTES = (
     (re.compile(r"\bfind\b[^|;]*\s-printf\b"),
-     "`find -printf` 是 GNU 扩展；BSD/macOS 上会直接报错。"),
+     "`find -printf` is a GNU extension and fails on BSD/macOS."),
     (re.compile(r"\bsed\s+-i\s"),
-     "`sed -i` 的备份参数语义在 GNU 与 BSD 上不同（BSD 需 `-i ''`）。"),
+     "the `sed -i` backup argument differs between GNU and BSD (BSD needs `-i ''`)."),
     (re.compile(r"\bgrep\b[^|;]*\s-P\b"),
-     "`grep -P` 依赖 PCRE，BSD/macOS 上不可用；改用 `-E`。"),
+     "`grep -P` needs PCRE and is unavailable on BSD/macOS; use `-E`."),
     (re.compile(r"\breadlink\b|\bstat\s+-c\b"),
-     "`readlink -f` / `stat -c` 是 GNU 行为，BSD 上参数不同。"),
+     "`readlink -f` / `stat -c` are GNU behavior; BSD takes different arguments."),
 )
 
 
@@ -94,11 +94,11 @@ class Template:
         """渲染成注入给模型的一个单元。正文原样保留（含"不要这样做"等章节）。"""
         head = [f"### {self.id}"]
         if self.desc:
-            head.append(f"用途：{self.desc}")
+            head.append(f"Purpose: {self.desc}")
         if self.tags:
-            head.append(f"标签：{', '.join(self.tags)}")
+            head.append(f'Tags: {", ".join(self.tags)}')
         if self.when:
-            head.append(f"适用：{self.when}")
+            head.append(f"Applies when: {self.when}")
         return "\n".join(head) + "\n\n" + self.body.strip()
 
     def haystack(self):
@@ -139,7 +139,7 @@ def parse_front_matter(text):
         index += 1
 
     if not closed:
-        raise ValueError("front matter 未闭合（缺少结尾的 --- 行）")
+        raise ValueError("front matter is not closed (missing the closing --- line)")
     return meta, "\n".join(lines[index:])
 
 
@@ -149,12 +149,12 @@ def parse_template_file(path):
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise ValueError(f"读取失败: {exc}") from exc
+        raise ValueError(f"read failed: {exc}") from exc
 
     meta, body = parse_front_matter(text)
     tid = str(meta.get("id") or path.stem).strip()
     if not ID_OK_RE.match(tid):
-        raise ValueError(f"id 含非法字符: {tid!r}（用字母/数字/下划线/连字符/中文）")
+        raise ValueError(f"id contains invalid characters: {tid!r} (use letters, digits, underscores, hyphens, or CJK)")
 
     tags = meta.get("tags") or ()
     if isinstance(tags, str):
@@ -232,12 +232,12 @@ def load_templates(cwd=None, warn=None):
             try:
                 tpl = parse_template_file(path)
             except ValueError as exc:
-                warn(f"模板已跳过 {path}: {exc}")
+                warn(f"template skipped {path}: {exc}")
                 continue
             if tpl.id in merged:
                 old = merged[tpl.id]
                 if not _same_content(old.path, str(path)):
-                    warn(f"模板 {tpl.id!r} 被覆盖: {old.path} -> {path}")
+                    warn(f"template {tpl.id!r} overridden: {old.path} -> {path}")
             else:
                 order.append(tpl.id)
             merged[tpl.id] = tpl
@@ -399,13 +399,13 @@ def render_index(templates):
     """索引层文本：id | desc | 适用 | tags。紧凑，永远全量。"""
     lines = []
     for tpl in templates:
-        parts = [f"- {tpl.id}: {tpl.desc or '(未写 desc)'}"]
+        parts = [f"- {tpl.id}: {tpl.desc or '(no desc)'}"]
         if tpl.when:
-            parts.append(f"适用：{tpl.when}")
+            parts.append(f"Applies when: {tpl.when}")
         if tpl.tags:
             parts.append(f"tags: {', '.join(tpl.tags)}")
         lines.append(" | ".join(parts))
-    return "可用模板索引：\n" + "\n".join(lines)
+    return "Available template index:\n" + "\n".join(lines)
 
 
 def render_templates(templates, index=None, strategy="full"):
@@ -415,25 +415,22 @@ def render_templates(templates, index=None, strategy="full"):
     """
     head = [
         "<templates>",
-        "以下是你在这个环境里积累的命令参考。它们是**用户自己维护的笔记，没有经过"
-        "任何验证**，也不是必须照抄：可以改写以适应本次请求的具体参数。",
-        "**这些模板不享有任何权限豁免。** 由它派生出的命令与其它命令完全同等对待，"
-        "同样要经过安全检查与人工确认。不要因为它是模板就默认它安全。",
-        "（模板正文里的「已验证」只是作者自己的标注，不代表任何保证；以实际环境为准。）",
-        "冲突时的优先级：用户本次的明确要求 > <environment> 里的环境事实 > 这些模板 >"
-        " 上面的通用规则。",
-        "需要同时满足的多个子问题，请合并成**一条**命令，一次答完。",
-        "（用户用 @id 提及时，表示他指定要用那个模板。）",
+        "The following are command references accumulated in this environment. They are **notes maintained by the user and have not been verified**; you do not have to copy them verbatim — adapt them to the parameters of this request.",
+        "**These templates get no permission exemption.** Commands derived from them are treated exactly like any other command and still go through the safety check and human confirmation. Do not assume a template is safe just because it is a template.",
+        "(\"verified\" inside a template is only the author's note, not a guarantee; trust the actual environment.)",
+        "Priority when they conflict: the user's explicit request in this turn > environment facts in <environment> > these templates > the general rules above.",
+        "If several sub-questions must be answered together, combine them into **one** command and answer them all at once.",
+        "(When the user mentions @id, they mean that specific template.)",
     ]
     sections = []
     if index:
         head.append(
-            "下面是全部可用模板的索引。附有正文的模板标注在正文区；只有索引的模板"
-            "需要时可按 id 向用户确认。")
+            "Below is the index of all available templates. Templates with bodies are marked in the body section; for index-only templates, ask the user by id when needed.")
         sections.append(render_index(index))
     if templates:
         units = "\n\n".join(t.as_unit() for t in templates)
-        sections.append(("以下是相关模板的完整正文：\n\n" + units) if index else units)
+        sections.append(("Full body of the relevant templates:\n\n" + units)
+                        if index else units)
     return "\n".join(head) + "\n\n" + "\n\n".join(sections) + "\n</templates>"
 
 
@@ -548,12 +545,9 @@ def render_listing(cwd=None, max_lines=LS_MAX_LINES, max_chars=LS_MAX_CHARS):
     if len(body) > max_chars:
         body = body[:max_chars]
         truncated = True
-    header = (
-        "启动时对当前目录执行 `ls -alF` 的快照。它可能已经过期：不要硬编码这里的"
-        "文件名，需要准确结果时请生成新的命令去读取。"
-    )
+    header = "A snapshot of `ls -alF` in the current directory taken at startup. It may be stale: do not hard-code these filenames; generate a new command when you need accurate results."
     if truncated:
-        header += "（输出已截断）"
+        header += " (output truncated)"
     return "\n".join([
         "<directory_listing>",
         header,
@@ -586,12 +580,10 @@ def render_environment(cwd=None, platform=None, facts=None, confirm_hint=True):
     ]
     shell = detect_user_shell()
     if shell != "bash":
-        lines.append(
-            f"用户的交互 shell 是 {shell}，但命令由 woc 用 bash 执行；"
-            "zsh/fish 专有写法需要改写成 bash 兼容形式。")
+        lines.append(f"The user's interactive shell is {shell}, but woc runs commands with bash; rewrite zsh/fish-specific syntax into bash-compatible form.")
     lines.extend(facts if facts is not None else _static_facts())
     if confirm_hint:
-        lines.append("用户在终端里，命令执行前会有人工确认。")
+        lines.append("The user is in a terminal, and every command is confirmed by a human before execution.")
     lines.append("</environment>")
     return "\n".join(lines)
 
@@ -717,7 +709,7 @@ def install_templates(ids=None, cwd=None, dry_run=False, warn=None, project_dir=
         try:
             tpl = parse_template_file(path)
         except ValueError as exc:
-            warn(f"模板已跳过 {path}: {exc}")
+            warn(f"template skipped {path}: {exc}")
             continue
         available[tpl.id] = (tpl, path)
 
@@ -810,23 +802,21 @@ def lint_templates(templates):
     for tpl in templates:
         blocks = extract_code_blocks(tpl.body)
         if not blocks:
-            warnings.append((tpl.id, "没有任何 ``` 代码块，模型无从参考"))
+            warnings.append((tpl.id, "no ``` code block, so the model has nothing to reference"))
         if not tpl.desc:
-            warnings.append((tpl.id, "front matter 缺少 desc，影响后续检索"))
+            warnings.append((tpl.id, "front matter has no desc, which hurts retrieval"))
         if not tpl.tags:
-            warnings.append((tpl.id, "front matter 缺少 tags，影响后续检索"))
+            warnings.append((tpl.id, "front matter has no tags, which hurts retrieval"))
 
         for _lang, lines in blocks:
             candidates = command_lines(lines)
             if len(candidates) > 1:
-                note = (f"代码块含 {len(candidates)} 行命令；`sanitize` 只取第一行，"
-                        "其余会被截断。建议合并成单行（用 && 或 ;）")
+                note = f"the code block has {len(candidates)} command lines; `sanitize` keeps only the first and truncates the rest. Merge them into one line (with && or ;)."
                 # 第一行是纯赋值时后果最严重：截断后既不产出输出，变量也不会被用到
                 if is_assignment_only(candidates[0]):
                     errors.append((
                         tpl.id,
-                        "第一行是纯变量赋值且后面还有命令 → `sanitize` 会报错拒绝执行。"
-                        "必须合并成单行：" + candidates[0][:50] + " ; ...",
+                        f"the first line is a pure variable assignment and more commands follow → `sanitize` will refuse to execute. Merge them into one line: {candidates[0][:50]} ; ...",
                     ))
                 else:
                     warnings.append((tpl.id, note))
@@ -834,9 +824,11 @@ def lint_templates(templates):
                 if is_dangerous(line):
                     errors.append((
                         tpl.id,
-                        f"参考命令会被 is_dangerous 拦截（命令位置规则）: {line[:70]}",
+                        f"the reference command is blocked by is_dangerous (command-position rules): {line[:70]}",
                     ))
                 for pattern, note in PORTABILITY_NOTES:
                     if pattern.search(line):
-                        warnings.append((tpl.id, f"可移植性: {note} → {line[:60]}"))
+                        warnings.append((
+                            tpl.id,
+                            f"portability: {note} → {line[:60]}"))
     return errors, warnings

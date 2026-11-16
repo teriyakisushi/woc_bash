@@ -17,17 +17,16 @@ import posixpath
 import re
 import shlex
 
-
 # ---------- 旧规则：只在回退路径使用 ----------
 
 _LEGACY_PATTERNS = (
-    (r"\brm\s+-rf\s+/(\s|$)", "递归删除根目录"),
-    (r"\bmkfs\b", "格式化文件系统"),
-    (r"\bdd\s+.*of=/dev/[sh]d", "直接写块设备"),
-    (r":\(\)\s*\{.*\};\s*:", "fork 炸弹"),
-    (r"\bchmod\s+-R\s+777\s+/(\s|$)", "把根目录权限改成 777"),
-    (r">\s*/dev/[sh]d", "直接写块设备"),
-    (r"\b(shutdown|reboot|halt|poweroff)\b", "关机 / 重启"),
+    (r"\brm\s+-rf\s+/(\s|$)", "recursive deletion of the root directory"),
+    (r"\bmkfs\b", "formatting a filesystem"),
+    (r"\bdd\s+.*of=/dev/[sh]d", "writing directly to a block device"),
+    (r":\(\)\s*\{.*\};\s*:", "fork bomb"),
+    (r"\bchmod\s+-R\s+777\s+/(\s|$)", "changing root directory permissions to 777"),
+    (r">\s*/dev/[sh]d", "writing directly to a block device"),
+    (r"\b(shutdown|reboot|halt|poweroff)\b", "shutdown / reboot"),
 )
 
 _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -658,7 +657,7 @@ def _rm_reason(argv):
     for target in targets:
         normalized = _normalize_target(target)
         if normalized == "/" or normalized.startswith("/*"):
-            return "递归删除根目录"
+            return "recursive deletion of the root directory"
     return None
 
 
@@ -684,7 +683,7 @@ def _chmod_reason(argv):
     for target in targets:
         normalized = _normalize_target(target)
         if normalized == "/" or normalized.startswith("/*"):
-            return "把根目录权限改成 777"
+            return "changing root directory permissions to 777"
     return None
 
 
@@ -694,12 +693,12 @@ def _systemctl_reason(argv):
         return None
     verb = args[0]
     if verb in ("reboot", "poweroff", "halt", "kexec", "suspend", "hibernate"):
-        return "关机 / 重启"
+        return "shutdown / reboot"
     if verb in ("start", "restart", "isolate", "reload", "try-restart",
                 "force-reload"):
         units = ("reboot.target", "poweroff.target", "halt.target", "kexec.target")
         if any(tok in units for tok in args[1:]):
-            return "关机 / 重启"
+            return "shutdown / reboot"
     return None
 
 
@@ -774,23 +773,23 @@ def _analyze_segment(seg, depth=0):
     if head == "rm":
         return _rm_reason(argv)
     if head == "mkfs" or head.startswith("mkfs.") or head == "mke2fs":
-        return "格式化文件系统"
+        return "formatting a filesystem"
     if head == "mkswap" and any(_is_block_device(tok) for tok in argv[1:]):
-        return "格式化文件系统"
+        return "formatting a filesystem"
     if head == "dd":
         for tok in argv[1:]:
             if tok.startswith("of=") and _is_block_device(tok[3:]):
-                return "直接写块设备"
+                return "writing directly to a block device"
         return None
     if head in ("shutdown", "reboot", "halt", "poweroff"):
-        return "关机 / 重启"
+        return "shutdown / reboot"
     if head in ("init", "telinit"):
         if any(tok in ("0", "6") for tok in argv[1:]):
-            return "关机 / 重启"
+            return "shutdown / reboot"
         return None
     if head == "kexec":
         if "-e" in argv[1:] or "--exec" in argv[1:]:
-            return "关机 / 重启"
+            return "shutdown / reboot"
         return None
     if head == "systemctl":
         return _systemctl_reason(argv)
@@ -799,7 +798,7 @@ def _analyze_segment(seg, depth=0):
     if head == "tee":
         for tok in argv[1:]:
             if not tok.startswith("-") and _is_block_device(tok):
-                return "直接写块设备"
+                return "writing directly to a block device"
         return None
     if head in _SHELLS:
         script = _shell_script(argv)
@@ -851,14 +850,14 @@ def _analyze(cmd, depth=0):
         return None
     unquoted = _strip_quoted(cmd)
     if _FORK_BOMB_RE.search(unquoted):
-        return "fork 炸弹"
+        return "fork bomb"
     for inner in _extract_substitutions(cmd):
         reason = _analyze(inner, depth + 1)
         if reason:
             return reason
     for target in _redirect_targets(cmd):
         if _is_block_device(target):
-            return "直接写块设备"
+            return "writing directly to a block device"
     # 结构检查之后再看 stdin 喂 shell：这样 `... | bash > /dev/nvme0n1`
     # 也能被重定向规则抓住，而不是直接交给旧的子串规则。
     if _has_dynamic_shell(cmd):

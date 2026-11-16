@@ -55,7 +55,7 @@ class CompletionCliTest(unittest.TestCase):
     def test_missing_shell_exits_2(self):
         proc = self.run_cli("--completion")
         self.assertEqual(proc.returncode, 2)
-        self.assertIn("用法", proc.stderr)
+        self.assertIn("usage:", proc.stderr)
 
 
 if __name__ == "__main__":

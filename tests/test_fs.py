@@ -96,7 +96,7 @@ class ReadTest(FsCase):
         code, out, err = self.run_fs("read", str(path), "--max-chars", "100")
         self.assertEqual(code, 0, err)
         self.assertLess(len(out), 200)
-        self.assertIn("截断于 100 字符", out)
+        self.assertIn("truncated at 100 chars", out)
 
 
 class WriteTest(FsCase):
@@ -200,15 +200,15 @@ class EditTest(FsCase):
         code, out, err = self.run_fs("edit", str(path), "--old", "def alpah():", "--new", "x")
         self.assertEqual(code, 1)
         self.assertEqual(out, "")
-        self.assertIn("没找到", err)
-        self.assertIn("第 1 行", err)
+        self.assertIn("--old was not found", err)
+        self.assertIn("line 1", err)
         self.assertEqual(path.read_text(encoding="utf-8"), "def alpha():\n    pass\n")
 
     def test_ambiguous_match_refuses_and_leaves_file_alone(self):
         path = self.make("a.txt", "x\nx\nx\n")
         code, _out, err = self.run_fs("edit", str(path), "--old", "x", "--new", "y")
         self.assertEqual(code, 1)
-        self.assertIn("命中 3 处", err)
+        self.assertIn("matched 3 times", err)
         self.assertIn("--all", err)
         self.assertEqual(path.read_text(encoding="utf-8"), "x\nx\nx\n")
 
@@ -248,7 +248,7 @@ class EditTest(FsCase):
         path = self.make("a.txt", "x\n")
         code, _out, err = self.run_fs("edit", str(path), "--old", "")
         self.assertEqual(code, 1)
-        self.assertIn("--old 是空的", err)
+        self.assertIn("--old is empty", err)
 
 
     def test_success_reports_line_and_context(self):
@@ -280,7 +280,7 @@ class EditTest(FsCase):
         code, _out, err = self.run_fs("edit", str(path), "--old", "x", "--new", "y",
                                       "--occurrence", "3")
         self.assertEqual(code, 1)
-        self.assertIn("越界", err)
+        self.assertIn("out of range", err)
         self.assertEqual(path.read_text(encoding="utf-8"), "x\nx\n")
 
     def test_occurrence_and_all_conflict(self):
@@ -288,7 +288,7 @@ class EditTest(FsCase):
         code, _out, err = self.run_fs("edit", str(path), "--old", "x", "--new", "y",
                                       "--all", "--occurrence", "1")
         self.assertEqual(code, 1)
-        self.assertIn("只能选一个", err)
+        self.assertIn("mutually exclusive", err)
 
     def test_stdin_for_both_sides_is_refused(self):
         path = self.make("a.txt", "x\n")
@@ -310,7 +310,7 @@ class EditTest(FsCase):
         code, _out, err = self.run_fs("edit", str(path), "--old", r"a\nb",
                                       "--new", "z")
         self.assertEqual(code, 1)
-        self.assertIn("没找到", err)
+        self.assertIn("--old was not found", err)
         self.assertEqual(path.read_text(encoding="utf-8"), "a\nb\n")
 
 
@@ -321,7 +321,7 @@ class InstallerNameTest(unittest.TestCase):
         import importlib.util
 
         spec = importlib.util.spec_from_file_location(
-            "woc_compile_under_test", os.path.join(ROOT, "compile.py"))
+            "woc_install_under_test", os.path.join(ROOT, "install.py"))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 

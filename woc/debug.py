@@ -8,6 +8,7 @@
 
 import sys
 
+
 _enabled = False
 _alias = "woc"
 
@@ -33,7 +34,7 @@ def log(message):
 def usage_line(usage):
     """把 SSE 里返回的 usage 压成一行。字段缺失就省略，不做猜测。"""
     if not usage:
-        return "usage: (服务端未返回)"
+        return "usage: (not returned by the server)"
     parts = [f"prompt={usage.get('prompt_tokens', '?')}",
              f"completion={usage.get('completion_tokens', '?')}",
              f"total={usage.get('total_tokens', '?')}"]

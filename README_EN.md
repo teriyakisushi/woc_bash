@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-success)](woc.py)
-[![Tests](https://img.shields.io/badge/tests-335%20passing-brightgreen)](.github/workflows/test.yml)
+[![Tests](https://img.shields.io/badge/tests-353%20passing-brightgreen)](.github/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 `woc` is a natural-language command assistant that runs in your terminal. It turns everyday descriptions into Shell commands, answers questions, and can execute commands while carrying the results forward across multi-turn sessions.
@@ -39,20 +39,20 @@ The project uses only the Python standard library; no third-party dependencies a
 Run this in the project root:
 
 ```bash
-python3 compile.py --key sk-xxxx
+python3 install.py --key sk-xxxx
 ```
 
 The installer puts the commands in `~/bin` by default and tries to add that directory to your current Shell's config file. It asks for the log alias and three command names (press Enter for the defaults, see `[prefix]` in [docs/CONFIG.md](docs/CONFIG.md)). It also installs a file read/write command `<woc command name>-fs` (default `woc-fs`): the name is derived from `woc_prefix` and does not take an extra config key.
 You can also skip API Key configuration and set it later:
 
 ```bash
-python3 compile.py --no-key
+python3 install.py --no-key
 ```
 
 Specify the install directory:
 
 ```bash
-python3 compile.py --prefix ~/.local/bin --key sk-xxxx
+python3 install.py --prefix ~/.local/bin --key sk-xxxx
 ```
 
 The installer also writes the full config template to `~/.config/woc/config.toml`: **only missing entries are added**, existing keys and values are never touched. Upgrading the installer never loses config, and new config items (e.g. `[search]`) land after one install.

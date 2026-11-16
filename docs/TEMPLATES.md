@@ -88,8 +88,8 @@ woc --check-templates                        # 自检：危险命令误拦、多
 ```bash
 woc --install-templates              # 把当前项目的模板全部装到用户级
 woc --install-templates git-recent-changes   # 只装指定的几个
-python3 compile.py --global-templates [ID...]  # 等价入口，走安装器
-python3 compile.py --list-templates            # 先看看有哪些
+python3 install.py --global-templates [ID...]  # 等价入口，走安装器
+python3 install.py --list-templates            # 先看看有哪些
 ```
 
 内容相同的模板会被跳过（显示"已是最新"），重复执行是安全的。用户级目录遵循

@@ -105,7 +105,7 @@ class SessionFileTest(unittest.TestCase):
         session.save([{"role": "user", "content": "x" * 50000}])
         content = session.load()["messages"][0]["content"]
         self.assertLessEqual(len(content), session.MAX_MESSAGE_CHARS + 20)
-        self.assertIn("已截断", content)
+        self.assertIn("truncated", content)
 
     def test_last_command_roundtrip(self):
         session.save([{"role": "user", "content": "q"}],
@@ -126,7 +126,7 @@ class SessionFileTest(unittest.TestCase):
         note = session.context_note({"saved_at": "2026-10-19 10:00:00",
                                      "cwd": "/somewhere/else"})
         self.assertIn("2026-10-19 10:00:00", note)
-        self.assertIn("过期", note)
+        self.assertIn("may be stale", note)
         self.assertIn("session_context", note)
 
 
@@ -154,12 +154,12 @@ class MultiIntegrationTest(unittest.TestCase):
                      last={"command": "du -sh .", "output": "1G\n",
                            "stderr": "", "code": 0})
         self.run_wocc(["--last-session"], [":q"])
-        self.assertIn("已恢复上次会话", self.stderr.getvalue())
+        self.assertIn("restored the previous session", self.stderr.getvalue())
         self.assertEqual(multi.last_command(), "du -sh .")
 
     def test_missing_session_is_reported(self):
         self.run_wocc(["--last-session"], [":q"])
-        self.assertIn("没有可恢复的会话", self.stderr.getvalue())
+        self.assertIn("no session to restore", self.stderr.getvalue())
 
     def test_saves_after_each_turn(self):
         with mock.patch.object(multi, "run_turn", return_value=None):
@@ -234,22 +234,22 @@ class SessionFlagTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             self.run_cli(["--sessions"])
         self.assertEqual(ctx.exception.code, 0)
-        self.assertIn("已保存的会话", self.stderr.getvalue())
+        self.assertIn("saved sessions", self.stderr.getvalue())
 
     def test_sessions_without_data(self):
         with self.assertRaises(SystemExit):
             self.run_cli(["--sessions"])
-        self.assertIn("还没有保存过会话", self.stderr.getvalue())
+        self.assertIn("no saved sessions yet", self.stderr.getvalue())
 
     def test_resume_named_session(self):
         session.save([{"role": "user", "content": "旧问题"},
                       {"role": "assistant", "content": "#CHAT: 旧回答"}])
         name = session.list_sessions()[0]["name"]
         self.run_cli(["--resume", name])
-        self.assertIn("已恢复上次会话", self.stderr.getvalue())
+        self.assertIn("restored the previous session", self.stderr.getvalue())
 
     def test_resume_without_name_exits_2(self):
         with self.assertRaises(SystemExit) as ctx:
             self.run_cli(["--resume"])
         self.assertEqual(ctx.exception.code, 2)
-        self.assertIn("需要一个会话名", self.stderr.getvalue())
+        self.assertIn("--resume needs a session name", self.stderr.getvalue())

@@ -16,12 +16,13 @@ _COMMANDS = ["woc", "wocc", "woc_chat"]
 
 def _cmd_list_templates(query=None):
     templates, sources = load_templates()
-    print(f"{_tag()} template 目录（后者优先级更高）:")
+    print(f"{_tag()} template directories (later ones take precedence):")
     for path, exists in sources:
-        print(f"  {'✓' if exists else '·'} {path}{'' if exists else '  (不存在)'}")
+        print(f"  {'✓' if exists else '·'} {path}"
+              f"{'' if exists else '  (missing)'}")
     if not templates:
         print()
-        print(f"{_tag()} 还没有任何模板。新建 ~/.config/woc/templates/<id>.md 即可。")
+        print(f"{_tag()} no templates yet. Create ~/.config/woc/templates/<id>.md.")
         return 0
 
     detail = {}
@@ -31,38 +32,36 @@ def _cmd_list_templates(query=None):
         stable_context(query=query, templates=templates, detail=detail)
 
     print()
-    print(f"{_tag()} 已加载 {len(templates)} 个模板")
-    print(f"      索引层: {detail.get('indexed', 0)} 个（恒定全量，"
-          f"约 {detail.get('index_chars', 0)} 字符）")
-    print(f"      正文层: {len(detail.get('bodies', []))} 个，策略 {detail.get('strategy')}，"
-          f"约 {detail.get('body_chars', 0)} 字符（预算 {BODY_BUDGET}）")
+    print(f"{_tag()} loaded {len(templates)} templates")
+    print(f'      index: {detail.get("indexed", 0)} (always complete, about {detail.get("index_chars", 0)} chars)')
+    print(f'      bodies: {len(detail.get("bodies", []))}, strategy {detail.get("strategy")}, about {detail.get("body_chars", 0)} chars (budget {BODY_BUDGET})')
     if query is not None:
-        print(f"      查询: {query!r}")
+        print(f"      query: {query!r}")
     print()
 
     body_ids = set(detail.get("bodies", []))
     scores = detail.get("scores", {})
     for tpl in templates:
-        mark = "正文" if tpl.id in body_ids else "仅索引"
+        mark = "body" if tpl.id in body_ids else "index only"
         score = scores.get(tpl.id)
         suffix = f"  score={score}" if query is not None and score is not None else ""
         print(f"  [{mark}] @{tpl.id}{suffix}")
-        print(f"      {tpl.desc or '(未写 desc)'}")
+        print(f"      {tpl.desc or '(no desc)'}")
         if tpl.when:
-            print(f"      适用: {tpl.when}")
+            print(f"      applies when: {tpl.when}")
         if tpl.tags:
             print(f"      tags: {', '.join(tpl.tags)}")
         print(f"      {tpl.path}")
     if query is None:
         print()
-        print(f'{_tag()} 想看某次查询会选中哪些正文，用: {_COMMAND} --templates --query "你的问题"')
+        print(f'{_tag()} to see which bodies a query selects, run: {_COMMAND} --templates --query "your question"')
     return 0
 
 
 def _cmd_lint_templates():
     templates, _sources = load_templates()
     if not templates:
-        print(f"{_tag()} 没有模板可检查。", file=sys.stderr)
+        print(f"{_tag()} no templates to check.", file=sys.stderr)
         return 0
 
     errors, warnings = lint_templates(templates)
@@ -71,8 +70,7 @@ def _cmd_lint_templates():
     for tid, msg in warnings:
         print(f"{_tag()} ⚠ {tid}: {msg}", file=sys.stderr)
 
-    print(f"{_tag()} 已检查 {len(templates)} 个模板: "
-          f"{len(errors)} 个错误, {len(warnings)} 个提示")
+    print(f"{_tag()} checked {len(templates)} templates: {len(errors)} errors, {len(warnings)} warnings")
     return 1 if errors else 0
 
 
@@ -81,29 +79,31 @@ def _cmd_install_templates(ids):
     src_dir = project_template_dir()
     dest_dir = user_template_dir()
 
-    print(f"{_tag()} 来源: {src_dir or '(当前目录不属于任何项目)'}")
-    print(f"{_tag()} 目标: {dest_dir}")
+    print(f'{_tag()} source: {src_dir or "(the current directory is not in a project)"}')
+    print(f"{_tag()} target: {dest_dir}")
     for tid in copied:
-        print(f"  ✓ 已安装 {tid}")
+        print(f"  ✓ installed {tid}")
     for tid in skipped:
-        print(f"  = 已是最新 {tid}（未改动）")
+        print(f"  = up to date {tid} (unchanged)")
     for tid in missing:
-        print(f"  ✗ 项目级找不到 {tid}", file=sys.stderr)
+        print(f"  ✗ not found at project level: {tid}", file=sys.stderr)
     for tid, reason in failed:
-        print(f"  ✗ 写入失败 {tid}: {reason}", file=sys.stderr)
+        print(f"  ✗ failed to write {tid}: {reason}",
+              file=sys.stderr)
 
     if not copied and not skipped:
         if failed:
-            print(f"{_tag()} 没有模板被安装（全部写入失败）", file=sys.stderr)
+            print(f"{_tag()} no templates were installed (all writes failed)",
+                  file=sys.stderr)
         else:
-            print(f"{_tag()} 没有可安装的模板。")
+            print(f"{_tag()} no installable templates.")
         return 1 if (missing or failed) else 0
 
-    print(f"{_tag()} 完成: 安装 {len(copied)} 个, 未变 {len(skipped)} 个"
-          + (f", 缺失 {len(missing)} 个" if missing else "")
-          + (f", 失败 {len(failed)} 个" if failed else ""))
-    print(f"{_tag()} 现在这些模板在所有项目里都可用（用户级优先，会覆盖项目级同名 id）")
-    print(f"{_tag()} 注意: <templates> 段已变化，下一次请求的前缀缓存会重建一次。")
+    print(f"{_tag()} done: installed {len(copied)}, unchanged {len(skipped)}"
+          + (f", missing {len(missing)}" if missing else "")
+          + (f", failed {len(failed)}" if failed else ""))
+    print(f"{_tag()} these templates are now available in all projects (user-level wins over project-level with the same id)")
+    print(f"{_tag()} note: the <templates> block changed; the prefix cache will be rebuilt once on the next request.")
     return 1 if (missing or failed) else 0
 
 
@@ -119,7 +119,8 @@ def _split_query(rest):
 def _cmd_completion(rest):
     shell = rest[0] if rest else ""
     if shell not in SHELLS:
-        print(f"用法: {_COMMAND} --completion bash|zsh", file=sys.stderr)
+        print(f"usage: {_COMMAND} --completion bash|zsh",
+              file=sys.stderr)
         return 2
     print(render_completion(shell, _COMMANDS))
     return 0

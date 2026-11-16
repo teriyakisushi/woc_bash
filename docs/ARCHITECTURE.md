@@ -143,8 +143,8 @@ sha256sum/lsblk/tree`）。`find`（`-exec`）、`sort`（`-o` 写盘）、`awk`
 | `woc/cli/single.py` | 默认路径 | 24.5 ms / 155 modules |
 
 `import woc` 本身 0.1 ms / 66 modules；`woc --help` 30～39 ms（端到端，含解释器启动）。
-`tests/test_help.py` 与 `tests/test_search.py` 的 `LazyImportTest` 是这两条边界的守门人：
-少了懒加载、或把 search 拉进启动路径，它们会红。
+`tests/test_help.py` 与 `tests/test_search.py` 的 `LazyImportTest` 是这几条边界的守门人：
+少了懒加载、把 search 拉进启动路径，它们会红。
 
 ---
 
@@ -167,8 +167,8 @@ fs.py        纯 IO，只被 woc-fs 调用        （独立命令，不参与 lo
    在 `tests/test_gate.py`（改判据必须同步），执行层不需要重复判据。
 2. **一个命令只有一个执行路径**：`LLM 生成 → sanitize → is_dangerous → 用户确认`
    （`woc/context.py:21` 的注释把这句话钉住了）。模板、补全、历史回放都不许另开路径。
-3. **配置是两处事实**：`woc/config.py` 的默认值与 `compile.py` 的 `CONFIG_TEMPLATE`
-   必须一致，`tests/test_compile.py` 按集合与值双向比对 —— 少一个键、多一个键、
+3. **配置是两处事实**：`woc/config.py` 的默认值与 `install.py` 的 `CONFIG_TEMPLATE`
+   必须一致，`tests/test_install.py` 按集合与值双向比对 —— 少一个键、多一个键、
    值不同都会红。
 
 ---
@@ -180,7 +180,7 @@ fs.py        纯 IO，只被 woc-fs 调用        （独立命令，不参与 lo
 | 数据 | 位置 | 生命周期与限制 |
 |---|---|---|
 | 会话 | `$XDG_STATE_HOME/woc/sessions/last.json`（默认 `~/.local/state/woc/sessions/`） | 目录 0700 / 文件 0600；`MAX_MESSAGES=40`、`MAX_CHARS=60000`、单条 `12000`；带时间戳归档保留 `MAX_ARCHIVES=20` 份（`--sessions` 列出，`--resume NAME` 恢复） |
-| 配置 | `$XDG_CONFIG_HOME/woc/config.toml`（默认 `~/.config/woc/`） | 0600；环境变量优先于文件；默认值另有一份在 `compile.py` 的 `CONFIG_TEMPLATE`，两处必须一致 |
+| 配置 | `$XDG_CONFIG_HOME/woc/config.toml`（默认 `~/.config/woc/`） | 0600；环境变量优先于文件；默认值另有一份在 `install.py` 的 `CONFIG_TEMPLATE`，两处必须一致 |
 | 模板 | 用户级 `$XDG_CONFIG_HOME/woc/templates`（`woc/context.py:680`）；项目级 `./.woc/templates`（`woc/context.py:691`，`woc/context.py:198` 收集） | 纯文本 Markdown；安装走 `--install-templates`（项目级）与 `--global-templates`（用户级） |
 | 调试输出 | stderr | `WOC_DEBUG=1` 才有（`woc/debug.py`：usage、前缀规模、loop 每步）。stdout 只放答案与命令 |
 | 执行结果 | 不落盘 | 命令输出只在内存里回灌下一轮；`:more` 从 `_LAST` 重新展开 |
@@ -195,7 +195,7 @@ fs.py        纯 IO，只被 woc-fs 调用        （独立命令，不参与 lo
 
 ## 9. 测试地图（改哪里，先跑哪一组）
 
-全部离线，`python3 -m unittest discover -s tests`（310+ 个用例，约 0.3 s，1 个 live skip）。
+全部离线，`python3 -m unittest discover -s tests`（353 个用例，约 4 s，1 个 live skip）。
 `WOC_LIVE_TEST=1` 才真调 API —— 会有费用，默认不跑。
 
 | 文件 | 守住什么 |
@@ -206,9 +206,10 @@ fs.py        纯 IO，只被 woc-fs 调用        （独立命令，不参与 lo
 | `tests/test_pipe.py` | 管道模式：`detect_format` 只认 diff/json、prompt 不预设日志、二进制拒绝、头尾截断 |
 | `tests/test_search.py` | 搜索：`query_by_llm` 两种来源、`derive_query` 回退、来源行、字符预算、懒加载 |
 | `tests/test_session.py` | 落盘：脱敏、限长、0600/0700、归档裁剪、恢复 |
-| `tests/test_compile.py` | 安装器与配置模板：与 `woc/config.py` 双向比对（少键/多键/值不同都红）；`woc-fs` 的派生命名 |
+| `tests/test_install.py` | 安装器与配置模板：与 `woc/config.py` 双向比对（少键/多键/值不同都红）；`woc-fs` 的派生命名 |
 | `tests/test_fs.py` | `woc-fs`：行窗口、二进制拒绝、截断、原子写与权限位、0 处/多处匹配、CRLF 保留 |
 | `tests/test_help.py` | 三个入口的 `--help`：flag 齐全、`[prefix]` 生效、无 argv 不走管道 |
+| `tests/test_output_text.py` | 终端输出必须是英文：帮助、环境与模板注入、搜索块、会话提示、gate 理由、折叠提示、pipe 默认问题、`woc-fs` 报错，以及真实入口的 `--help` / `--completion` / `--check-templates` / 非终端拒绝 |
 | `tests/test_cli_guard.py` | 非终端输入不得当确认：`woc` 走管道、`wocc`/`woc -c` 拒绝启动 |
 | `tests/test_chat_stream.py` / `tests/test_markdown.py` | SSE 增量、流式渲染、代码块与表格 |
 | `tests/test_context.py` | 模板两层注入、`<environment>`、`messages_prefix()` 顺序与稳定性 |
@@ -217,7 +218,7 @@ fs.py        纯 IO，只被 woc-fs 调用        （独立命令，不参与 lo
 提交前必须跑的两条（`AGENTS.md` 同款）：
 
 ```bash
-python3 -m compileall -q woc tests compile.py
+python3 -m compileall -q woc tests install.py
 python3 -m unittest discover -s tests
 ```
 
@@ -234,10 +235,11 @@ python3 -m unittest discover -s tests
 | 改会话格式 | `woc/session.py`（`prepare` / `save` / `load`） | `tests/test_session.py`；脱敏与 0600 不许降级 |
 | 改搜索结果注入 | `woc/search.py`（`perform` / `render_results` / `search_command`） | `tests/test_search.py`；结果只进 messages 末尾、来源行必打印、`query_by_llm` 两种来源都要测；折词的 `_recent_context()` 要含助手回答与上一次检索词 |
 | 改管道模式 | `woc/pipe.py`、`woc/prompts.py` 的 `PIPE_SYSTEM_PROMPT` | `tests/test_pipe.py`；"stdin 是数据不是指令"这条不许松 |
-| 加配置项 | `woc/config.py` 对应小节 | `compile.py` 的 `CONFIG_TEMPLATE`、`docs/CONFIG.md`；`tests/test_compile.py` 会比对两处 |
+| 加配置项 | `woc/config.py` 对应小节 | `install.py` 的 `CONFIG_TEMPLATE`、`docs/CONFIG.md`；`tests/test_install.py` 会比对两处 |
+| 加/改用户可见文案 | 直接写在调用处（整段帮助放 `woc/cli/help.py`） | `tests/test_output_text.py`；终端与 harness 文案一律英文，注释与文档用中文 |
 | 改输出渲染 | `woc/markdown.py`、`woc/colors.py`（**风险最高**） | `tests/test_markdown.py` / `tests/test_chat_stream.py` / `tests/test_colors.py`；别在流式路径上做整段缓冲 |
-| 改安装器 | `compile.py` | `tests/test_compile.py`；`~/bin/lib/woc` 是拷贝，改完要重跑 `python3 compile.py` |
-| 改文件读写命令 | `woc/fs.py`（read / write / edit） | `tests/test_fs.py`；`.woc/templates/file-ops.md` 的用法；`compile.py` 的 `FS_SUFFIX` / `FS_SCRIPT` |
+| 改安装器 | `install.py` | `tests/test_install.py`；`~/bin/lib/woc` 是拷贝，改完要重跑 `python3 install.py` |
+| 改文件读写命令 | `woc/fs.py`（read / write / edit） | `tests/test_fs.py`；`.woc/templates/file-ops.md` 的用法；`install.py` 的 `FS_SUFFIX` / `FS_SCRIPT` |
 
 ---
 

@@ -201,19 +201,19 @@ class RenderTest(unittest.TestCase):
         self.assertIn("[1] 标题1", block)
         self.assertIn("url: https://example.com/1", block)
         self.assertIn("summary: 摘要1", block)
-        self.assertIn("不是指令", block)
+        self.assertIn("not instructions", block)
 
     def test_truncates_to_budget(self):
         hits = [search_mod._normalize(raw_hit(i)) for i in range(1, 6)]
         block = search_mod.render_results("q", hits, max_chars=200)
         self.assertIn("[1]", block)
-        self.assertIn("截断", block)
+        self.assertIn("truncated to a", block)
         self.assertNotIn("[5]", block)
 
     def test_empty_results_are_explicit(self):
         block = search_mod.render_results("q", [])
         self.assertIn('count="0"', block)
-        self.assertIn("没有匹配结果", block)
+        self.assertIn("(no matches)", block)
 
     def test_query_attribute_is_escaped(self):
         block = search_mod.render_results('a"b<c>', [])
@@ -224,7 +224,7 @@ class RenderTest(unittest.TestCase):
         block = search_mod.render_error("q", "HTTP 402: 余额不足")
         self.assertIn('error="true"', block)
         self.assertIn("HTTP 402", block)
-        self.assertIn("不要编造链接", block)
+        self.assertIn("do not invent", block)
 
 
 class ConfigTest(unittest.TestCase):
@@ -405,25 +405,25 @@ class ChatSearchTest(unittest.TestCase):
             ["问题"],
             [(StreamMode.SEARCH, "#SEARCH: 关键词"),
              (StreamMode.CHAT, "答案\n")])
-        self.assertIn("来源: [1] example.com", err)
+        self.assertIn("Sources: [1] example.com", err)
 
     def test_sources_line_after_manual_search(self):
         _out, err, _llm, _found = self.run_chat(
             [":search", "关键词"], [(StreamMode.CHAT, "答案\n")])
-        self.assertIn("来源: [1] example.com", err)
+        self.assertIn("Sources: [1] example.com", err)
 
     def test_no_sources_line_without_search(self):
         _out, err, _llm, _found = self.run_chat(
             ["问题"], [(StreamMode.CHAT, "答案\n")])
-        self.assertNotIn("来源:", err)
+        self.assertNotIn("Sources:", err)
 
     def test_toggle_off_blocks_model_search(self):
         _out, err, llm, found = self.run_chat_inputs(
             [], [":search off", "问题", ":q"],
             [(StreamMode.SEARCH, "#SEARCH: 不该搜")])
         self.assertEqual(found, [])
-        self.assertIn("已关闭模型自主搜索", err)
-        self.assertIn("关掉了自主搜索", err)
+        self.assertIn("autonomous web search disabled", err)
+        self.assertIn("autonomous search is off", err)
         # 系统提示里那段 hint 已经被摘掉
         self.assertNotIn("WEB SEARCH", llm.calls[0][0]["content"])
 
@@ -433,7 +433,7 @@ class ChatSearchTest(unittest.TestCase):
             [(StreamMode.SEARCH, "#SEARCH: 搜一下"),
              (StreamMode.CHAT, "答案\n")])
         self.assertEqual(found, ["搜一下"])
-        self.assertIn("已开启模型自主搜索", err)
+        self.assertIn("autonomous web search enabled", err)
         self.assertIn("WEB SEARCH", llm.calls[0][0]["content"])
 
     def test_search_is_on_by_default(self):
@@ -498,7 +498,7 @@ class ChatSearchTest(unittest.TestCase):
         self.assertEqual(found, [])
         self.assertEqual(len(llm.calls), 1)
         self.assertNotIn("#SEARCH", out)
-        self.assertIn("关掉了自主搜索", err)
+        self.assertIn("autonomous search is off", err)
 
     def test_max_searches_is_a_hard_stop(self):
         _out, err, llm, found = self.run_chat(
@@ -508,7 +508,7 @@ class ChatSearchTest(unittest.TestCase):
             cfg=make_cfg(search={"max_searches": 1}))
         self.assertEqual(found, ["第一次"])
         self.assertEqual(len(llm.calls), 2)
-        self.assertIn("上限", err)
+        self.assertIn("search limit", err)
 
     def test_search_failure_is_degraded_not_fatal(self):
         out, _err, llm, found = self.run_chat(
@@ -518,7 +518,7 @@ class ChatSearchTest(unittest.TestCase):
             error="HTTP 402: 余额不足")
         self.assertEqual(found, ["余额"])
         # 第二次请求里必须明确告诉模型"搜索失败了"，而不是让它以为没搜过。
-        self.assertIn("搜索失败", llm.calls[1][-1]["content"])
+        self.assertIn("Search failed", llm.calls[1][-1]["content"])
         self.assertIn("据我所知", out)
 
     def test_search_command_answers_immediately(self):
@@ -528,24 +528,24 @@ class ChatSearchTest(unittest.TestCase):
             [(StreamMode.CHAT, "现在有 V4。\n")])
         self.assertEqual(found, ["DeepSeek 发布"])
         self.assertEqual(len(llm.calls), 1, ":search 之后应当马上问一次模型")
-        self.assertIn("已搜索", err)
+        self.assertIn("searched", err)
         self.assertIn("现在有 V4。", out)
         # 模型收到的是搜索结果 + 一句明确的"请直接回答"。
         self.assertIn("<search_results", llm.calls[0][-1]["content"])
-        self.assertIn("请直接根据", llm.calls[0][-1]["content"])
+        self.assertIn("Answer directly based on", llm.calls[0][-1]["content"])
 
     def test_search_command_without_query_prints_usage(self):
         _out, err, llm, found = self.run_chat([":search"], [])
         self.assertEqual(found, [])
         self.assertEqual(llm.calls, [])
-        self.assertIn("用法", err)
+        self.assertIn("usage: :search", err)
 
     def test_search_failure_does_not_ask_the_model(self):
         _out, err, llm, found = self.run_chat(
             [":search", "任意"], [], error="HTTP 402: 余额不足")
         self.assertEqual(found, ["任意"])
         self.assertEqual(llm.calls, [], "搜都失败了，没有可回答的上下文")
-        self.assertIn("搜索失败", err)
+        self.assertIn("search failed", err)
 
     def test_search_command_works_without_search_flags(self):
         # 人工 :search 是显式动作，不受 --no-search / [search] enabled 限制。
@@ -554,7 +554,7 @@ class ChatSearchTest(unittest.TestCase):
             [":search", "任意"], [(StreamMode.CHAT, "好的\n")], cfg=cfg)
         self.assertEqual(found, ["任意"])
         self.assertEqual(len(llm.calls), 1)
-        self.assertIn("已搜索", err)
+        self.assertIn("searched", err)
 
 
 class SearchCommandSharedTest(unittest.TestCase):
@@ -578,8 +578,8 @@ class SearchCommandSharedTest(unittest.TestCase):
         self.assertEqual(messages[0]["role"], "user")
         self.assertIn("<search_results", messages[0]["content"])
         # ask=True：块末带一句"请直接回答"，否则模型拿到结果也不知道该做什么。
-        self.assertIn("请直接根据", messages[0]["content"])
-        self.assertIn("已搜索", err.getvalue())
+        self.assertIn("Answer directly based on", messages[0]["content"])
+        self.assertIn("searched", err.getvalue())
 
     def test_failure_does_not_touch_messages(self):
         cfg = make_cfg()
@@ -596,7 +596,7 @@ class SearchCommandSharedTest(unittest.TestCase):
             handled = search_mod.search_command(":search x", messages, cfg, "woc")
         self.assertFalse(handled, "搜索失败时调用方不该继续问模型")
         self.assertEqual(messages, [])
-        self.assertIn("搜索失败", err.getvalue())
+        self.assertIn("search failed", err.getvalue())
 
 
 class WoccSearchCommandTest(unittest.TestCase):
@@ -638,8 +638,8 @@ class WoccSearchCommandTest(unittest.TestCase):
 
         self.assertEqual(found, ["关键词"])
         self.assertEqual(len(rounds), 1, ":search 之后应当马上跑一回合")
-        self.assertIn("已搜索", err.getvalue())
-        self.assertIn("来源: [1] example.com", err.getvalue())
+        self.assertIn("searched", err.getvalue())
+        self.assertIn("Sources: [1] example.com", err.getvalue())
         self.assertTrue(any("<search_results" in str(item.get("content"))
                             for item in messages))
 
@@ -722,7 +722,7 @@ class QueryByLlmTest(unittest.TestCase):
         self.assertTrue(hits)
         self.assertEqual(found[0][0], "quic http3 区别")
         self.assertEqual(found[0][1], "帮我看看 quic 和 http3 现在到底什么关系")
-        self.assertIn("检索词", err, "换了检索词就要让用户看见")
+        self.assertIn("original:", err, "换了检索词就要让用户看见")
 
     def test_raw_mode_uses_the_text_as_is(self):
         cfg = make_cfg(search={"query_by_llm": False})
@@ -732,7 +732,7 @@ class QueryByLlmTest(unittest.TestCase):
         self.assertTrue(hits)
         self.assertEqual(found[0][0], "gitea 最新版本")
         derive.assert_not_called()
-        self.assertNotIn("检索词", err)
+        self.assertNotIn("original:", err)
 
     def test_llm_failure_falls_back_to_raw(self):
         hits, found, _err, _msgs = self.run_command(
@@ -752,13 +752,13 @@ class QueryByLlmTest(unittest.TestCase):
         hits, found, err, _msgs = self.run_command(":search", cfg=cfg)
         self.assertFalse(hits)
         self.assertEqual(found, [])
-        self.assertIn("用法", err)
+        self.assertIn("usage: :search", err)
 
     def test_block_asks_about_the_original_question(self):
         _hits, _found, _err, msgs = self.run_command(
             ":search 最新的 deepseek 版本是多少", derived="deepseek 版本")
         content = msgs[0]["content"]
-        self.assertIn("请直接根据", content)
+        self.assertIn("Answer directly based on", content)
         self.assertIn("最新的 deepseek 版本是多少", content,
                       "块末要回答原问题，不是回答关键词")
 
@@ -849,9 +849,9 @@ class RecentContextTest(unittest.TestCase):
             {"role": "assistant", "content": "输入 :q 退出。"},
         ]
         got = self.ctx(messages)
-        self.assertIn("用户: wocc 里怎么退出", got)
-        self.assertIn("助手: 输入 :q 退出。", got)
-        self.assertLess(got.index("用户:"), got.index("助手:"), "按时间正序拼接")
+        self.assertIn("User: wocc 里怎么退出", got)
+        self.assertIn("Assistant: 输入 :q 退出。", got)
+        self.assertLess(got.index("User:"), got.index("Assistant:"), "按时间正序拼接")
 
     def test_search_block_becomes_last_query(self):
         block = ('<search_results query="Vercel CLI latest version" count="10">'
@@ -861,7 +861,7 @@ class RecentContextTest(unittest.TestCase):
             {"role": "assistant", "content": "Vercel CLI 当前版本是 65.3.1"},
         ]
         got = self.ctx(messages)
-        self.assertIn("搜索过: Vercel CLI latest version", got)
+        self.assertIn("Searched: Vercel CLI latest version", got)
         self.assertNotIn("资料正文不该被重发", got)
 
     def test_limit_and_truncation(self):
@@ -871,7 +871,7 @@ class RecentContextTest(unittest.TestCase):
         lines = got.splitlines()
         self.assertEqual(len(lines), 2, "只取最近几条")
         for line in lines:
-            self.assertLessEqual(len(line), len("用户: ") + 20)
+            self.assertLessEqual(len(line), len("User: ") + 20)
 
     def test_skips_other_roles_and_broken_blocks(self):
         messages = [
@@ -882,7 +882,7 @@ class RecentContextTest(unittest.TestCase):
         got = self.ctx(messages)
         self.assertNotIn("系统提示不该出现", got)
         self.assertNotIn("没有 query 属性", got)
-        self.assertIn("助手: ok", got)
+        self.assertIn("Assistant: ok", got)
 
     def test_derive_sends_entity_from_context(self):
         from woc import llm as llm_mod
@@ -905,7 +905,7 @@ class RecentContextTest(unittest.TestCase):
                 messages, make_cfg(), "woc")
         self.assertEqual(got, "Vercel CLI next release")
         self.assertIn("Vercel", seen["payload"], "上下文里的实体要进折词请求")
-        self.assertIn("搜索过: Vercel CLI latest version", seen["payload"])
+        self.assertIn("Searched: Vercel CLI latest version", seen["payload"])
 
     def test_prompt_resolves_back_references(self):
         flat = " ".join(search_mod.QUERY_PROMPT.split())

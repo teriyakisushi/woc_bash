@@ -34,6 +34,7 @@ import os
 import sys
 import tempfile
 
+
 PROG = "woc-fs"
 DEFAULT_HEAD = 60
 DEFAULT_MAX_CHARS = 20000
@@ -198,7 +199,7 @@ def cmd_read(args):
             lo = int(head) if head.strip() else 1
             hi = int(tail) if tail.strip() else total
         except ValueError:
-            raise Failure(f"--lines 需要 A:B 形式，收到 {args.lines!r}")
+            raise Failure(f"--lines expects A:B, got {args.lines!r}")
     elif args.tail is not None:
         lo, hi = max(1, total - args.tail + 1), total
     else:
@@ -207,7 +208,7 @@ def cmd_read(args):
     lo = max(1, lo)
     hi = min(total, hi)
     if total and hi < lo:
-        raise Failure(f"{args.path}: 行区间 {lo}-{hi} 为空（文件共 {total} 行）")
+        raise Failure(f"{args.path}: line range {lo}-{hi} is empty (file has {total} lines)")
 
     if args.raw:
         body = "".join(lines[lo - 1:hi]) if total else ""
@@ -220,8 +221,7 @@ def cmd_read(args):
 
     limit = DEFAULT_MAX_CHARS if args.max_chars is None else args.max_chars
     if limit > 0 and len(body) > limit:
-        body = body[:limit].rstrip() + (
-            f"\n[{args.path}: 截断于 {limit} 字符，缩小 --lines/--head 再看]\n")
+        body = body[:limit].rstrip() + f"\n[{args.path}: truncated at {limit} chars; narrow --lines/--head to see more]\n"
     sys.stdout.write(body)
 
 
@@ -248,11 +248,11 @@ def cmd_write(args):
         return
 
     if not args.mkdir and not os.path.isdir(directory):
-        raise Failure(f"{directory}: no such directory（加 --mkdir 创建）")
+        raise Failure(f"{directory}: no such directory (add --mkdir to create it)")
     _existed, saved = atomic_write(args.path, text, backup=args.backup,
                                    dry_run=args.dry_run)
     verb = "would write" if args.dry_run else "wrote"
-    note = f"（备份 {saved}）" if saved else ""
+    note = f" (backup {saved})" if saved else ""
     print(f"{args.path}: {verb} {len(text)} chars, {count_lines(text)} lines{note}")
 
 
@@ -270,7 +270,7 @@ def _closest_line(text, old):
     snippet = stripped[index]
     if len(snippet) > 80:
         snippet = snippet[:77] + "..."
-    return f"（最接近的是第 {index + 1} 行: {snippet}）"
+    return f" (closest match at line {index + 1}: {snippet})"
 
 
 def _line_of(text, offset):
@@ -310,10 +310,9 @@ def _spots_text(text, positions):
 
 def cmd_edit(args):
     if args.all and args.occurrence is not None:
-        raise Failure("--all 和 --occurrence 只能选一个")
+        raise Failure("--all and --occurrence are mutually exclusive")
     if args.old == "-" and args.new == "-":
-        raise Failure("--old 和 --new 不能同时用 -（stdin 只读得了一次）；"
-                      "改用 @file，或让其中一个走命令行")
+        raise Failure("--old and --new cannot both use - (stdin can only be read once); use @file, or pass one of them on the command line")
 
     old = load_text(args.old)
     new = "" if args.new is None else load_text(args.new)
@@ -323,17 +322,16 @@ def cmd_edit(args):
         if args.new is not None and not _is_file_spec(args.new):
             new = _unescape(new)
     if not old:
-        raise Failure("--old 是空的，没什么可替换")
+        raise Failure("--old is empty; nothing to replace")
 
     text = read_text(args.path)
     count = text.count(old)
     if count == 0:
-        raise Failure(f"--old 在 {args.path} 里没找到{_closest_line(text, old)}")
+        raise Failure(f"--old was not found in {args.path}{_closest_line(text, old)}")
 
     if args.occurrence is not None:
         if not 1 <= args.occurrence <= count:
-            raise Failure(f"--occurrence {args.occurrence} 越界："
-                          f"--old 在 {args.path} 里命中 {count} 处")
+            raise Failure(f"--occurrence {args.occurrence} is out of range: --old matched {count} times in {args.path}")
         position = -1
         for _ in range(args.occurrence):
             position = text.find(old, position + 1)
@@ -359,9 +357,7 @@ def cmd_edit(args):
             spots.append(str(text.count("\n", 0, found) + 1))
             start = found + 1
         more = " ..." if count > len(spots) else ""
-        raise Failure(f"--old 在 {args.path} 命中 {count} 处"
-                      f"（行 {', '.join(spots)}{more}）；"
-                      f"用 --all 全换，或 --occurrence N 只换第 N 处")
+        raise Failure(f'--old matched {count} times in {args.path} (lines {", ".join(spots)}{more}); use --all to replace all, or --occurrence N to replace only the Nth')
     else:
         position = text.find(old)
         positions = [position]
@@ -382,47 +378,54 @@ def cmd_edit(args):
 def build_parser(prog=PROG):
     parser = argparse.ArgumentParser(
         prog=prog,
-        description="文件读写（read / write / edit）：输出给模型看，一行摘要 + 数据。",
+        description="File read/write (read / write / edit): designed for the model, one summary line plus data.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="内容参数支持 @file（读文件）与 -（读 stdin）。"
-               "退出码：0 成功 / 1 失败 / 2 参数错误。",
+        epilog="Content arguments accept @file (read from a file) and - (read from stdin). Exit codes: 0 success / 1 failure / 2 argument error.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="read|write|edit")
 
-    read = sub.add_parser("read", help="按行窗口读取，带行号")
+    read = sub.add_parser("read", help="read a line window with line numbers")
     read.add_argument("path")
-    read.add_argument("--lines", help="行区间，1 基、闭区间，如 40:80；写 40: 表示到文件尾")
-    read.add_argument("--head", type=int, help=f"前 N 行（默认 {DEFAULT_HEAD}）")
-    read.add_argument("--tail", type=int, help="后 N 行")
+    read.add_argument("--lines",
+                      help="line range, 1-based and inclusive, e.g. 40:80; 40: means through EOF")
+    read.add_argument("--head", type=int,
+                      help=f"first N lines (default {DEFAULT_HEAD})")
+    read.add_argument("--tail", type=int, help="last N lines")
     read.add_argument("--max-chars", type=int, dest="max_chars",
-                      help=f"输出字符上限（默认 {DEFAULT_MAX_CHARS}，0 表示不限）")
-    read.add_argument("--raw", action="store_true", help="只吐内容，不加头部与行号")
+                      help=f"output character limit (default {DEFAULT_MAX_CHARS}; 0 means unlimited)")
+    read.add_argument("--raw", action="store_true",
+                      help="emit only content, without header or line numbers")
 
-    write = sub.add_parser("write", help="整文件写入（或 --append）")
+    write = sub.add_parser("write", help="write a whole file (or --append)")
     write.add_argument("path")
-    write.add_argument("--content", help="内容；@file 读文件、- 读 stdin，省略则读 stdin")
-    write.add_argument("--mkdir", action="store_true", help="父目录不存在就创建")
+    write.add_argument("--content",
+                       help="content; @file reads a file, - reads stdin; omitted means stdin")
+    write.add_argument("--mkdir", action="store_true",
+                       help="create missing parent directories")
     write.add_argument("--backup", action="store_true",
-                       help="先备份为 <path>.bak（重名时用 .bak.1、.bak.2 …，不覆盖）")
-    write.add_argument("--append", action="store_true", help="追加而不是覆盖")
+                       help="back up to <path>.bak first (then .bak.1, .bak.2 …; never overwrites)")
+    write.add_argument("--append", action="store_true",
+                       help="append instead of overwrite")
     write.add_argument("--escapes", action="store_true",
-                       help=r"展开 --content 里的 \n \t \\（@file 与 stdin 不展开）")
+                       help="expand \\n \\t \\\\ in --content (not in @file or stdin)")
     write.add_argument("--dry-run", action="store_true", dest="dry_run",
-                       help="只报摘要不落盘")
+                       help="report a summary without writing")
 
-    edit = sub.add_parser("edit", help="字面量替换（默认要求唯一匹配）")
+    edit = sub.add_parser("edit", help="literal replacement (must match exactly once by default)")
     edit.add_argument("path")
-    edit.add_argument("--old", required=True, help="被替换的原文；@file / - 同样可用")
-    edit.add_argument("--new", help="替换成什么，省略表示删除")
-    edit.add_argument("--all", action="store_true", help="命中多处时全部替换")
+    edit.add_argument("--old", required=True,
+                      help="text to replace; @file / - also work")
+    edit.add_argument("--new", help="replacement; omitted means delete")
+    edit.add_argument("--all", action="store_true",
+                      help="replace every match")
     edit.add_argument("--backup", action="store_true",
-                      help="先备份为 <path>.bak（重名时用 .bak.1、.bak.2 …，不覆盖）")
+                      help="back up to <path>.bak first (then .bak.1, .bak.2 …; never overwrites)")
     edit.add_argument("--occurrence", type=int, metavar="N",
-                      help="只替换第 N 处命中（1 基），不再要求唯一匹配")
+                      help="replace only the Nth match (1-based); no longer requires a unique match")
     edit.add_argument("--escapes", action="store_true",
-                      help=r"展开 --old / --new 里的 \n \t \\（@file 与 stdin 不展开）")
+                      help="expand \\n \\t \\\\ in --old / --new (not in @file or stdin)")
     edit.add_argument("--dry-run", action="store_true", dest="dry_run",
-                      help="只报摘要不落盘")
+                      help="report a summary without writing")
     return parser
 
 

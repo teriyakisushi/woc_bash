@@ -2,7 +2,7 @@
 
 不要在 `__init__` 里 eager import 整个依赖图：那会让 `import woc.config` 被迫
 拉起 colors（termios/tty）、llm、context，既拖慢启动，也让"只读配置"的工具
-（compile.py）被迫依赖整包可导入。属性访问时才导入对应模块。
+（install.py）被迫依赖整包可导入。属性访问时才导入对应模块。
 """
 
 import importlib

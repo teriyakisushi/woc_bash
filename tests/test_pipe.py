@@ -117,7 +117,7 @@ class ReadStdinTest(unittest.TestCase):
         with mock.patch.object(sys, "stdin", FakeStdin(payload.encode())):
             text, truncated = P.read_stdin(100)
         self.assertTrue(truncated)
-        self.assertIn("已截断", text)
+        self.assertIn("truncated", text)
 
     def test_multibyte_not_split_into_replacement_chars(self):
         payload = "日志分析" * 50
@@ -135,7 +135,7 @@ class TruncateMiddleTest(unittest.TestCase):
         self.assertTrue(cut.startswith("HEAD"))
         self.assertTrue(cut.endswith("TAIL"))
         self.assertGreater(removed, 0)
-        self.assertIn("已截断", cut)
+        self.assertIn("truncated", cut)
 
     def test_noop_when_short(self):
         text, removed = P.truncate_middle("short", 100)
@@ -202,12 +202,12 @@ class RunPipeModeTest(unittest.TestCase):
     def test_empty_stdin_exits_2(self):
         with PipeHarness(raw=b"") as harness:
             self.assertEqual(P.run_pipe_mode(["q"], CFG), 2)
-        self.assertIn("标准输入为空", harness.stderr.getvalue())
+        self.assertIn("standard input is empty", harness.stderr.getvalue())
 
     def test_binary_exits_2(self):
         with PipeHarness(raw=b"\x00binary") as harness:
             self.assertEqual(P.run_pipe_mode(["q"], CFG), 2)
-        self.assertIn("二进制", harness.stderr.getvalue())
+        self.assertIn("binary data", harness.stderr.getvalue())
 
     def test_llm_error_exits_3(self):
         with PipeHarness(error=LLMError("boom")) as harness:
@@ -225,8 +225,8 @@ class RunPipeModeTest(unittest.TestCase):
         cfg = dict(CFG, pipe={"enabled": True, "max_chars": 20})
         with PipeHarness(raw=("y" * 500).encode()) as harness:
             self.assertEqual(P.run_pipe_mode(["q"], cfg), 0)
-        self.assertIn("已截断", harness.messages[0][2]["content"])
-        self.assertIn("已截断", harness.stderr.getvalue())
+        self.assertIn("truncated", harness.messages[0][2]["content"])
+        self.assertIn("truncated", harness.stderr.getvalue())
 
 
 class SingleDispatchTest(unittest.TestCase):
@@ -333,25 +333,25 @@ class MaxCharsOverrideTest(unittest.TestCase):
         with PipeHarness(raw=("y" * 500).encode()) as harness:
             code = P.run_pipe_mode(["--max-chars", "20", "q"], CFG)
         self.assertEqual(code, 0)
-        self.assertIn("输入超过 20 字符", harness.stderr.getvalue())
-        self.assertIn("已截断", harness.messages[0][2]["content"])
+        self.assertIn("input exceeds 20 chars", harness.stderr.getvalue())
+        self.assertIn("truncated", harness.messages[0][2]["content"])
 
     def test_override_equals_form(self):
         with PipeHarness(raw=("y" * 500).encode()) as harness:
             self.assertEqual(P.run_pipe_mode(["--max-chars=30", "q"], CFG), 0)
-        self.assertIn("输入超过 30 字符", harness.stderr.getvalue())
+        self.assertIn("input exceeds 30 chars", harness.stderr.getvalue())
 
     def test_invalid_override_exits_2(self):
         with PipeHarness(raw=b"data") as harness:
             self.assertEqual(P.run_pipe_mode(["--max-chars", "abc", "q"], CFG), 2)
-        self.assertIn("正整数", harness.stderr.getvalue())
+        self.assertIn("positive integer", harness.stderr.getvalue())
 
     def test_override_cannot_exceed_budget(self):
         # budget 下限是 MIN_INPUT_CHARS(1000)，--max-chars 再大叫也越不过去
         cfg = dict(CFG, budget={"max_input_chars": 50})
         with PipeHarness(raw=("y" * 5000).encode()) as harness:
             self.assertEqual(P.run_pipe_mode(["--max-chars", "9999", "q"], cfg), 0)
-        self.assertIn("输入超过 1000 字符", harness.stderr.getvalue())
+        self.assertIn("input exceeds 1000 chars", harness.stderr.getvalue())
 
 
 class PromptTest(unittest.TestCase):
@@ -371,8 +371,8 @@ class PromptTest(unittest.TestCase):
             self.assertIn(needle, PIPE_SYSTEM_PROMPT)
 
     def test_default_question_is_not_log_only(self):
-        self.assertIn("日志", P.DEFAULT_QUESTION)
-        self.assertIn("文档", P.DEFAULT_QUESTION)
+        self.assertIn("log", P.DEFAULT_QUESTION)
+        self.assertIn("document", P.DEFAULT_QUESTION)
 
     def test_markdown_is_not_guessed(self):
         # 行首 # 既可能是标题，也可能是注释或日志前缀：猜错比不猜更糟。

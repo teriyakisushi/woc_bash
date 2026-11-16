@@ -153,6 +153,13 @@ Chat mode is for questions and answers; it never executes what it generates. It 
 
 Answers are **streamed**: SSE deltas are rendered line by line as they arrive, without waiting for the whole answer; tables appear as one block a little later, because column widths need the whole table.
 
+## Output language
+
+Terminal UI/logs and the harness text fed back to the model are always English; there is
+no language switch. Answers follow the language of your question (the prompt says "answer
+in the user's language"). Template bodies are user-maintained content and are not
+translated.
+
 ## Safety
 
 LLM output should not be treated as fully trustworthy. Check the command, the paths and the arguments before running anything, especially anything touching deletion, permissions, network requests or system configuration.
@@ -194,13 +201,13 @@ For a permanent setup, add that line to `~/.bashrc` / `~/.zshrc` (or redirect th
 Remove the commands and the PATH initialisation from your shell config:
 
 ```bash
-python3 compile.py --uninstall
+python3 install.py --uninstall
 ```
 
 To also delete `~/.config/woc/config.toml`:
 
 ```bash
-python3 compile.py --uninstall --purge-config
+python3 install.py --uninstall --purge-config
 ```
 
 ## Development checks

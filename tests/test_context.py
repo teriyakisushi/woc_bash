@@ -103,5 +103,17 @@ class SelectBodiesTest(unittest.TestCase):
         self.assertEqual([t.id for t in first], sorted(t.id for t in first))
 
 
+class ListingTextTest(unittest.TestCase):
+    """目录快照进稳定前缀，截断提示的拼接不能丢空格。"""
+
+    def test_truncation_marker_follows_a_space(self):
+        text = C.render_listing(cwd=".", max_lines=0)
+        self.assertIn("accurate results. (output truncated)", text)
+
+    def test_untruncated_has_no_marker(self):
+        text = C.render_listing(cwd=".", max_lines=1000, max_chars=1 << 20)
+        self.assertNotIn("output truncated", text)
+
+
 if __name__ == "__main__":
     unittest.main()

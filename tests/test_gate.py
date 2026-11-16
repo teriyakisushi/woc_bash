@@ -72,8 +72,8 @@ class GateTest(unittest.TestCase):
             self.assertIsNotNone(dangerous_reason(cmd), cmd)
 
     def test_reason_labels(self):
-        self.assertEqual(dangerous_reason("rm -rf /"), "递归删除根目录")
-        self.assertEqual(dangerous_reason("mkfs.ext4 /dev/sda1"), "格式化文件系统")
-        self.assertEqual(dangerous_reason("systemctl reboot"), "关机 / 重启")
+        self.assertEqual(dangerous_reason("rm -rf /"), "recursive deletion of the root directory")
+        self.assertEqual(dangerous_reason("mkfs.ext4 /dev/sda1"), "formatting a filesystem")
+        self.assertEqual(dangerous_reason("systemctl reboot"), "shutdown / reboot")
 
 

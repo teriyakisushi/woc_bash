@@ -30,7 +30,7 @@
 | 会话前缀 | **4 段 / 8707 字符** | 约 3.7k tokens |
 | 前缀缓存 | **hit=3456 / miss≈240** | 第二次请求起稳定 |
 | 单回合请求数 | **1** | 模型给命令 → 执行 → 回合结束 |
-| 代码规模 | 2986 行（含 `compile.py` 601） | 无第三方依赖 |
+| 代码规模 | 2986 行（含 `install.py` 601） | 无第三方依赖 |
 
 这张表是后面所有"轻量化"判断的基准：**任何改动都应该能回答"它把哪一行变贵了"**。
 
@@ -196,9 +196,9 @@ md5sum sha256sum lsblk tree
 | `woc/prompts.py` | `LOOP_HINT`（何时用 `#STEP:`、什么时候该收尾） | +12 |
 | `woc/config.py` | `[loop] enabled / max_steps / total_chars / auto_safe` | +14 |
 | `README.md` | 一节说明 + 配置示例 | +25 |
-| **不动** | `context.py` `sanitize.py` `exec.py` `colors.py` `single.py` `chat.py` `compile.py` | 0 |
+| **不动** | `context.py` `sanitize.py` `exec.py` `colors.py` `single.py` `chat.py` `install.py` | 0 |
 
-合计约 **+240 行**，净增 ~190 行。对比：现在全项目 2986 行（其中 `compile.py` 占 601）。
+合计约 **+240 行**，净增 ~190 行。对比：现在全项目 2986 行（其中 `install.py` 占 601）。
 
 ### 4.2 启动开销
 

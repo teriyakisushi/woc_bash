@@ -10,6 +10,7 @@ import select
 import time
 
 
+
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
@@ -196,8 +197,7 @@ def interactive_input(prompt, stream=sys.stderr, initial="", notice=None):
                 _remember(line)
                 stream.write("\n")
                 if dropped and notice is not None:
-                    notice("粘贴内容有多行，只保留第一行"
-                           "（其余 %d 字节已丢弃）" % dropped)
+                    notice(f"the pasted content had multiple lines; only the first was kept ({dropped} bytes discarded)")
                 stream.flush()
                 return line
             if char in (b"\x03",):

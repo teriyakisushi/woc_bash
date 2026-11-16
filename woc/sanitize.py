@@ -118,9 +118,7 @@ def sanitize(raw):
 
     # 工具调用残留不是命令：宁可报错让模型重写，也不能执行 placeholder。
     if _TOOLCALL_RE.search(raw) or _TOOLCALL_RE.search(text):
-        raise CommandGenError(
-            "模型输出了工具调用/标签格式，已拒绝执行；"
-            "请只返回一条命令，或 #CHAT: 回答")
+        raise CommandGenError("the model emitted tool-call/tag syntax; not executed. Return only one command, or answer with #CHAT:")
 
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     # 排除围栏行后剩下的内容行 —— 用于判断"是不是还有后续行被丢掉了"
@@ -132,7 +130,7 @@ def sanitize(raw):
             continue
         if _TAG_LINE_RE.match(line):
             raise CommandGenError(
-                "模型输出了 XML/标签行，已拒绝执行；请只返回一条命令")
+                "the model emitted an XML/tag line; not executed. Return only one command.")
         if line.startswith(CHAT_MARKER):
             raise ChatResponse(line[len(CHAT_MARKER):].strip())
         if line.startswith("#ERROR"):
@@ -152,14 +150,10 @@ def sanitize(raw):
         # 直接报错让模型重写，好过静默执行一条什么都没干的命令。
         if len(body_indexes) > 1 and index == first_body and is_assignment_only(line):
             remaining = len(body_indexes) - 1
-            raise CommandGenError(
-                f"命令不完整：返回了 {len(body_indexes)} 行，第一行只是变量赋值"
-                f"（{line[:50]}），另有 {remaining} 行无法生效。"
-                "请合并成一条单行命令，例如 f=$(...); echo \"$f\"; cat \"$f\""
-            )
+            raise CommandGenError(f'incomplete command: {len(body_indexes)} lines were returned, but the first line only assigns a variable ({line[:50]}) and {remaining} more lines cannot take effect. Merge them into one single-line command, e.g. f=$(...); echo "$f"; cat "$f"')
         return line
 
-    raise CommandGenError("LLM 未返回有效命令")
+    raise CommandGenError("the LLM returned no valid command")
 
 
 # 会打开交互式 root shell 的命令。在 wocc 的捕获路径里会挂住；在单轮模式里

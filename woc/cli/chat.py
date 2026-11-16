@@ -101,7 +101,7 @@ def _toggle_search(messages, alias, current, wanted):
     换来的是"不想花钱/不想它联网"时不用重启进程。
     """
     if wanted == current:
-        eprint(f"[{alias}] 模型自主搜索已经是{'开启' if current else '关闭'}状态",
+        eprint(f'[{alias}] autonomous web search is already {"enabled" if current else "disabled"}',
                C.GREEN)
         return current
 
@@ -109,12 +109,11 @@ def _toggle_search(messages, alias, current, wanted):
     if wanted:
         if not content.endswith(SEARCH_HINT):
             messages[0]["content"] = content + SEARCH_HINT
-        eprint(f"[{alias}] 已开启模型自主搜索（前缀缓存会重建一次）", C.GREEN)
+        eprint(f"[{alias}] autonomous web search enabled (the prefix cache will be rebuilt once)", C.GREEN)
     else:
         if content.endswith(SEARCH_HINT):
             messages[0]["content"] = content[:-len(SEARCH_HINT)]
-        eprint(f"[{alias}] 已关闭模型自主搜索（{SEARCH_COMMAND} on 恢复；"
-               f"{SEARCH_COMMAND} <关键词> 仍然可用）", C.GREEN)
+        eprint(f"[{alias}] autonomous web search disabled ({SEARCH_COMMAND} on re-enables it; {SEARCH_COMMAND} <query> still works)", C.GREEN)
     return wanted
 
 
@@ -140,7 +139,8 @@ def _answer(messages, cfg, alias, colors, search_on, settings, rollback=True,
                 sys.stdout.flush()
             if rollback:
                 messages.pop()
-            eprint(f"[{alias}] LLM 调用失败: {exc}", C.RED)
+            eprint(f"[{alias}] LLM call failed: {exc}",
+                   C.RED)
             return False
 
         if mode == StreamMode.SEARCH and can_search:
@@ -149,7 +149,7 @@ def _answer(messages, cfg, alias, colors, search_on, settings, rollback=True,
             hits, block, error = perform(query, cfg, alias)
             describe(alias, hits)      # 只有 WOC_DEBUG=1 时才真的打印
             if hits is None:
-                eprint(f"[{alias}] 搜索失败，已让模型改用自有知识: {error}", C.RED)
+                eprint(f"[{alias}] search failed; the model will answer from its own knowledge: {error}", C.RED)
             # 成功/空结果都不刷屏：命中列表只在 WOC_DEBUG=1 时打印
             # （见 woc/search.py 的 describe）。用户看到的只有答案 + 一行来源。
             messages.append({
@@ -167,19 +167,15 @@ def _answer(messages, cfg, alias, colors, search_on, settings, rollback=True,
             if rollback:
                 messages.pop()
             if search_on:
-                eprint(f"[{alias}] 本回合搜索已达上限 "
-                       f"{settings['max_searches']} 次（模型想搜: {query}）",
-                       C.YELLOW)
+                eprint(f'[{alias}] search limit reached for this turn ({settings["max_searches"]}); the model wanted to search: {query}', C.YELLOW)
             else:
-                eprint(f"[{alias}] 模型想搜索（{query}），但本会话关掉了自主搜索；"
-                       f"{SEARCH_COMMAND} on 打开，或直接用 {SEARCH_COMMAND} <关键词>",
-                       C.YELLOW)
+                eprint(f"[{alias}] the model wanted to search ({query}) but autonomous search is off; use {SEARCH_COMMAND} on, or {SEARCH_COMMAND} <query> directly", C.YELLOW)
             return False
 
         if not answer.strip():
             if rollback:
                 messages.pop()
-            eprint(f"[{alias}] LLM 未返回内容", C.RED)
+            eprint(f"[{alias}] LLM returned no content", C.RED)
             return False
 
         print()
@@ -213,7 +209,7 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
     one_shot = bool(args) and not sys.stdin.isatty()
     if not sys.stdin.isatty() and not args:
         # 非终端时交互输入会退化成 input()，管道内容会被当成下一轮问题。
-        eprint(f"[{alias}] 聊天模式需要终端：当前标准输入不是终端，已退出。", C.RED)
+        eprint(f"[{alias}] chat mode needs a terminal: standard input is not a terminal. Exiting.", C.RED)
         raise SystemExit(2)
 
     cwd = os.getcwd()
@@ -227,14 +223,12 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
     pending = " ".join(args) if args else None
     colors = C(sys.stdout)
 
-    eprint(f"[{alias}] 已进入聊天，当前目录: {cwd}", C.GREEN, C.BOLD)
+    eprint(f"[{alias}] chat started; current directory: {cwd}", C.GREEN, C.BOLD)
     if search_on:
-        eprint(f"[{alias}] 需要时会自动搜索网页（--no-search 关闭；"
-               f"{SEARCH_COMMAND} off 也可关）", C.GREEN)
+        eprint(f"[{alias}] web search is used when needed (disable with --no-search; {SEARCH_COMMAND} off also works)", C.GREEN)
     else:
-        eprint(f"[{alias}] 模型自主搜索已关闭；{SEARCH_COMMAND} <关键词> 仍可手动搜索",
-               C.GREEN)
-    eprint(f"[{alias}] 输入 :q 退出", C.GREEN)
+        eprint(f"[{alias}] autonomous web search is off; {SEARCH_COMMAND} <query> still searches manually", C.GREEN)
+    eprint(f"[{alias}] type :q to exit", C.GREEN)
 
     while True:
         if pending is not None:
@@ -249,13 +243,13 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
                         f"[{alias}] {msg}", C.YELLOW),
                 ).strip()
             except (KeyboardInterrupt, EOFError):
-                eprint(f"\n[{alias}] 会话结束", C.GREEN)
+                eprint(f"\n[{alias}] session ended", C.GREEN)
                 return
 
         if not question:
             continue
         if question in (":q", "exit", "quit"):
-            eprint(f"[{alias}] 会话结束", C.GREEN)
+            eprint(f"[{alias}] session ended", C.GREEN)
             return
         # 会话内命令按第一个词判断：:search / :search<空白>内容 都算，
         # 但 :searchfoo 不是（那是问题）。

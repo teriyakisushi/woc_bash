@@ -40,10 +40,11 @@ _HEAD_RATIO = 0.6
 
 # 没有给问题时用这句。刻意不预设“这是日志”：stdin 也可能是 README、源码或 diff。
 DEFAULT_QUESTION = (
-    "概括/解释上面这段内容的要点：如果是日志或命令输出，指出报错、异常与下一步；"
-    "如果是文档或代码，说明它讲什么、结构如何、哪里值得注意。"
-    "如果这段内容其实没什么可分析的（打招呼、道谢、闲聊、讲了个笑话），"
-    "就顺着用户的话头聊两句，语气轻松一点。"
+    "Summarize/explain the key points of the text above: if it is a log or command output, "
+    "point out errors, anomalies and the next step; if it is a document or code, say what it "
+    "is about, how it is structured, and what deserves attention. "
+    "If there is nothing to analyze (a greeting, thanks, small talk, a joke), just respond "
+    "in kind, briefly and lightly."
 )
 
 
@@ -83,7 +84,7 @@ def split_max_chars(argv):
         item = argv[index]
         if item == "--max-chars":
             if index + 1 >= len(argv):
-                raise ValueError("--max-chars 需要一个正整数")
+                raise ValueError("--max-chars needs a positive integer")
             override = _positive_int(argv[index + 1])
             index += 2
             continue
@@ -100,9 +101,9 @@ def _positive_int(raw):
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        raise ValueError("--max-chars 需要一个正整数: %r" % (raw,))
+        raise ValueError(f"--max-chars needs a positive integer: {raw!r}")
     if value <= 0:
-        raise ValueError("--max-chars 需要一个正整数: %r" % (raw,))
+        raise ValueError(f"--max-chars needs a positive integer: {raw!r}")
     return value
 
 
@@ -123,7 +124,7 @@ def truncate_middle(text, limit):
     if newline >= 0:
         tail = tail[newline + 1:]
     removed = len(text) - len(head) - len(tail)
-    marker = f"\n... [中间 {removed} 字符已截断] ...\n"
+    marker = f"\n... [{removed} chars truncated in the middle] ...\n"
     return head + marker + tail, removed
 
 
@@ -147,7 +148,7 @@ def read_stdin(max_chars):
         raw = sys.stdin.read(limit_bytes).encode("utf-8", "replace")
 
     if b"\x00" in raw[:_BINARY_PROBE]:
-        raise PipeInputError("标准输入看起来是二进制数据（含 NUL 字节），已拒绝")
+        raise PipeInputError("standard input looks like binary data (contains a NUL byte); refused")
 
     hit_limit = len(raw) >= limit_bytes
     text = _ANSI_RE.sub("", _decode(raw, hit_limit))
@@ -158,7 +159,7 @@ def read_stdin(max_chars):
         return text, True
     if hit_limit:
         # 字节上限先到（多字节字符居多）：内容可能没读完，必须显式标注
-        return text + "\n... [输入超过读取上限，后续内容未读取] ...", True
+        return text + "\n... [input exceeded the read limit; the rest was not read] ...", True
     return text, False
 
 
@@ -227,20 +228,20 @@ def run_pipe_mode(argv, cfg):
     try:
         data, truncated = read_stdin(max_chars)
     except KeyboardInterrupt:
-        eprint(f"\n[{alias}] 已取消", C.YELLOW)
+        eprint(f"\n[{alias}] Cancelled", C.YELLOW)
         return 130
     except PipeInputError as exc:
-        eprint(f"[{alias}] {exc}。", C.RED)
+        eprint(f"[{alias}] {exc}.", C.RED)
         return 2
     fmt = detect_format(data)
     debug.log("pipe: stdin=%d chars truncated=%s format=%s"
               % (len(data), truncated, fmt or "text"))
     if truncated:
-        eprint(f"[{alias}] 输入超过 {max_chars} 字符，已截断（只分析保留的部分）",
-               C.YELLOW)
+        eprint(f"[{alias}] input exceeds {max_chars} chars; truncated (only the kept part is analyzed)", C.YELLOW)
     if not data.strip():
-        eprint(f"[{alias}] 标准输入为空，没有可分析的内容。", C.RED)
-        eprint(f"[{alias}] 用法: <命令> | {name} \"你的问题\"", C.GREEN)
+        eprint(f"[{alias}] standard input is empty; nothing to analyze.",
+               C.RED)
+        eprint(f'[{alias}] usage: <command> | {name} "your question"', C.GREEN)
         return 2
 
     messages = build_pipe_messages(question, data, truncated=truncated,
@@ -262,7 +263,7 @@ def run_pipe_mode(argv, cfg):
     try:
         answer = call_llm_messages(messages, cfg, on_chunk=on_chunk)
     except KeyboardInterrupt:
-        eprint(f"\n[{alias}] 已取消", C.YELLOW)
+        eprint(f"\n[{alias}] Cancelled", C.YELLOW)
         return 130
     except LLMError as exc:
         eprint(f"[{alias}] {exc}", C.RED)

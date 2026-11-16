@@ -95,14 +95,14 @@ def _env_int(name, default, notes):
     try:
         return int(raw)
     except ValueError:
-        notes.append(f"环境变量 {name}={raw!r} 非法，已忽略")
+        notes.append(f"invalid environment variable {name}={raw!r}; ignored")
         return default
 
 
 def _env_positive_int(name, default, notes):
     value = _env_int(name, default, notes)
     if value <= 0:
-        notes.append(f"环境变量 {name}={value!r} 必须大于 0，已忽略")
+        notes.append(f"environment variable {name}={value!r} must be greater than 0; ignored")
         return default
     return value
 
@@ -115,10 +115,10 @@ def _env_optional_positive_int(name, notes):
     try:
         value = int(raw)
     except ValueError:
-        notes.append(f"环境变量 {name}={raw!r} 非法，已忽略")
+        notes.append(f"invalid environment variable {name}={raw!r}; ignored")
         return None
     if value <= 0:
-        notes.append(f"环境变量 {name}={value!r} 必须大于 0，已忽略")
+        notes.append(f"environment variable {name}={value!r} must be greater than 0; ignored")
         return None
     return value
 
@@ -127,10 +127,10 @@ def _file_positive_int(value, default, notes, name):
     try:
         number = int(value)
     except ValueError:
-        notes.append(f"配置项 {name} 非法: {value!r}，已忽略")
+        notes.append(f"invalid config item {name}: {value!r}; ignored")
         return default
     if number <= 0:
-        notes.append(f"配置项 {name} 必须大于 0: {value!r}，已忽略")
+        notes.append(f"config item {name} must be greater than 0: {value!r}; ignored")
         return default
     return number
 
@@ -140,8 +140,8 @@ def _thinking_effort(value, notes, source):
     effort = str(value).strip().lower()
     if effort in THINKING_EFFORTS:
         return effort
-    notes.append(f"{source}={effort!r} 非法（可选 "
-                 f"{'/'.join(THINKING_EFFORTS)}），已忽略")
+    options = "/".join(THINKING_EFFORTS)
+    notes.append(f"{source}={effort!r} is invalid (options: {options}); ignored")
     return THINKING_DEFAULTS["effort"]
 
 
@@ -398,7 +398,7 @@ def load_config(path=None):
             "effort": _thinking_effort(
                 os.environ.get("WOC_THINKING_EFFORT",
                                THINKING_DEFAULTS["effort"]),
-                notes, "环境变量 WOC_THINKING_EFFORT"),
+                notes, "env var WOC_THINKING_EFFORT"),
         },
         "pipe": {
             "enabled": _env_bool("WOC_PIPE", PIPE_DEFAULTS["enabled"]),
@@ -483,7 +483,7 @@ def load_config(path=None):
                     elif (key == "effort"
                           and "WOC_THINKING_EFFORT" not in os.environ):
                         cfg["thinking"]["effort"] = _thinking_effort(
-                            value, notes, "配置项 thinking.effort")
+                            value, notes, "config item thinking.effort")
                     continue
                 if section == "budget":
                     if (key == "context_tokens"
@@ -566,7 +566,7 @@ def load_config(path=None):
                     try:
                         cfg[key] = int(value)
                     except ValueError:
-                        notes.append(f"配置项 timeout 非法: {value!r}，已忽略")
+                        notes.append(f"invalid config item timeout: {value!r}; ignored")
                 elif key == "output_maxtokens":
                     if output_env is None:
                         cfg["budget"]["max_output_tokens"] = _file_positive_int(
@@ -576,7 +576,7 @@ def load_config(path=None):
     except FileNotFoundError:
         pass
     except OSError as exc:
-        notes.append(f"读取配置失败: {exc}")
+        notes.append(f"failed to read config: {exc}")
 
     # 旧读取方（llm.py 之前）仍然能拿到这个键。
     cfg["output_maxtokens"] = cfg["budget"]["max_output_tokens"]

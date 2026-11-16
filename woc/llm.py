@@ -108,7 +108,7 @@ class StreamFilter:
 # streaming call
 def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
     if not cfg["api_key"]:
-        raise LLMError("未配置 API Key（WOC_API_KEY 或 ~/.config/woc/config.toml）")
+        raise LLMError("no API key configured (WOC_API_KEY or ~/.config/woc/config.toml)")
 
     for m in messages:
         c = m.get("content")
@@ -179,7 +179,7 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
         body = e.read().decode("utf-8", "ignore")
         raise LLMError(f"HTTP {e.code}: {body}", code=e.code) from e
     except Exception as e:
-        raise LLMError(f"请求失败: {e}") from e
+        raise LLMError(f"request failed: {e}") from e
 
     try:
         for raw_line in resp:
@@ -214,7 +214,7 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
             _maybe_report_mode()
             _emit(out)
     except Exception as e:
-        raise LLMError(f"流式读取失败: {e}") from e
+        raise LLMError(f"stream read failed: {e}") from e
     finally:
         try:
             resp.close()
@@ -232,7 +232,7 @@ def call_llm_messages_stream(messages, cfg, on_chunk=None, on_mode=None):
         debug.log(debug.usage_line(usage))
 
     if not flt.acc.strip():
-        raise LLMError("LLM 未返回内容")
+        raise LLMError("the LLM returned no content")
 
     return flt.acc.strip()
 

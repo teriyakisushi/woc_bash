@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-success)](woc.py)
-[![Tests](https://img.shields.io/badge/tests-335%20passing-brightgreen)](.github/workflows/test.yml)
+[![Tests](https://img.shields.io/badge/tests-353%20passing-brightgreen)](.github/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 `woc` 是一个运行在终端里的自然语言命令助手。它可以把日常描述转换成
@@ -43,7 +43,7 @@ Shell 命令，也可以回答问题、执行命令并在多轮会话中继续�
 在项目根目录执行：
 
 ```bash
-python3 compile.py --key sk-xxxx
+python3 install.py --key sk-xxxx
 ```
 
 安装器默认把命令放到 `~/bin`，并尝试将该目录加入当前 Shell 的配置文件。
@@ -53,13 +53,13 @@ python3 compile.py --key sk-xxxx
 也可以跳过 API Key 配置，稍后手动设置：
 
 ```bash
-python3 compile.py --no-key
+python3 install.py --no-key
 ```
 
 指定安装目录：
 
 ```bash
-python3 compile.py --prefix ~/.local/bin --key sk-xxxx
+python3 install.py --prefix ~/.local/bin --key sk-xxxx
 ```
 
 安装器还会把完整的配置模板写进 `~/.config/woc/config.toml`：**只补缺失项**，

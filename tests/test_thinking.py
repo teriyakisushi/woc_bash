@@ -87,7 +87,7 @@ class ThinkingConfigTest(unittest.TestCase):
         with redirect_stderr(err):
             cfg = self.load("[thinking]\nenabled = true\neffort = \"ultra\"\n")
         self.assertEqual(thinking_effort(cfg), "high")
-        self.assertIn("非法", err.getvalue())
+        self.assertIn("is invalid", err.getvalue())
 
     def test_missing_section_is_tolerated(self):
         # 老配置/测试里手搓的 cfg 没有 thinking 键，不能炸。

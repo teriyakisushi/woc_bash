@@ -50,7 +50,7 @@
 - 解析：返回就是 JSON。
 - 网页转 Markdown：**服务端已经做了**（Fetch 返回 Markdown），`bs4` / `html2text`
   这类依赖的用途在这里不存在。
-- 分发模型：`compile.py` 假设"几个 .py 拷到 `~/bin` 就能跑"。引入 `requests`
+- 分发模型：`install.py` 假设"几个 .py 拷到 `~/bin` 就能跑"。引入 `requests`
   等于要求 venv/pip，破坏 README 与 AGENTS 的第一条硬约束。
 
 代价是重试、连接复用要自己写。目前只做**一次重试也没有**：`429/5xx` 直接降级成
@@ -182,7 +182,7 @@ summary: ...
 | `woc/prompts.py` | `SEARCH_HINT`（只在使用时拼） |
 | `woc/cli/chat.py` | `--search`、`#SEARCH:` 回合推进、`:search` 命令、搜索失败降级 |
 | `tests/test_search.py` | **新增** 41 个离线用例（端点/渲染/降级/chat 回合/wocc 命令/启动路径） |
-| `compile.py` | `CONFIG_TEMPLATE` + 合并逻辑：安装时只补缺失的配置项（§8.1） |
+| `install.py` | `CONFIG_TEMPLATE` + 合并逻辑：安装时只补缺失的配置项（§8.1） |
 
 一处顺带修好的旧问题：`on_mode` 之前晚于 `on_chunk`，导致 `#STEP:` 的首段命令
 没有按命令上色（单轮/loop 的 `on_chunk` 里读的是还没更新的 `state["mode"]`）。
@@ -197,7 +197,7 @@ summary: ...
 | `woc -c` 默认搜索 | 不用先开开关：模型判断需要实时信息就搜。代价从"要不要开"变成"模型觉得值不值"；`--no-search` 关本次会话，`[search] enabled = false` 关全局 |
 | 命中列表不进终端 | 自动搜索是"用户没按键就发生"的动作，刷标题 + URL 只会打断阅读。默认不打印命中列表（回答后只跟一行来源，见 §8.4）；`WOC_DEBUG=1` 才打印 query / 条数 / URL / 耗时 |
 | `:search` 进 `wocc` | 与 chat 共用 `search.perform()` / `search.search_command()`；搜完把结果压进上下文 |
-| 安装器补配置 | `compile.py` 把 `CONFIG_TEMPLATE` 合进 `config.toml`：**只补缺失项**，老配置的值和注释都不动。新增配置项（比如 `[search]`）装一次就到位，不用回 README 手抄 |
+| 安装器补配置 | `install.py` 把 `CONFIG_TEMPLATE` 合进 `config.toml`：**只补缺失项**，老配置的值和注释都不动。新增配置项（比如 `[search]`）装一次就到位，不用回 README 手抄 |
 
 不做"每问必搜"：固定 +1 请求与 +0.5s 延迟，而大多数问题不需要；`#SEARCH:` 把决定权
 交给模型，`max_searches=1` 兜住滥用。人工 `:search` 仍然是一条命令一次搜索。
@@ -248,7 +248,7 @@ summary: ...
 |---|---|
 | 回答后一行来源 | 静默搜索的代价是"看不出答案是否联网"。加一行 `[n] 域名`（本地映射，0 请求），把可审计性补回来；命中列表仍然只在 debug 里 |
 | `:search off / on` | 之前关自主搜索必须重启或改配置；改成会话内切换，改 system prompt 里的 hint，代价是前缀缓存重建一次 |
-| 配置模板一致性测试 | `CONFIG_TEMPLATE` 与 `config.py` 默认值是两份事实，靠人工纪律迟早漂移。`tests/test_compile.py` 现在按集合比对键、按值比对默认值：少一个键、多一个键、值不同都会红 |
+| 配置模板一致性测试 | `CONFIG_TEMPLATE` 与 `config.py` 默认值是两份事实，靠人工纪律迟早漂移。`tests/test_install.py` 现在按集合比对键、按值比对默认值：少一个键、多一个键、值不同都会红 |
 
 顺带把标题里的 `--search` 去掉了 —— 它早就是默认值，不该再出现在名字里。
 

@@ -46,17 +46,17 @@ class NonTtyGuardTest(unittest.TestCase):
     def test_woc_refuses_when_pipe_mode_disabled(self):
         code, err = self.run_cli(single.woc_main, ["列出文件"], single)
         self.assertEqual(code, 2)
-        self.assertIn("不是终端", err)
+        self.assertIn("not a terminal", err)
 
     def test_wocc_refuses_instead_of_auto_confirming(self):
         code, err = self.run_cli(multi.wocc_main, [], multi)
         self.assertEqual(code, 2)
-        self.assertIn("需要终端", err)
+        self.assertIn("needs a terminal", err)
 
     def test_chat_refuses_without_a_question(self):
         code, err = self.run_cli(chat.woc_chat_main, [], chat)
         self.assertEqual(code, 2)
-        self.assertIn("需要终端", err)
+        self.assertIn("needs a terminal", err)
 
 
 if __name__ == "__main__":

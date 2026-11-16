@@ -78,8 +78,8 @@ Project templates only apply inside this repository. To reuse them everywhere:
 ```bash
 woc --install-templates                      # install every template of this project to the user level
 woc --install-templates git-recent-changes    # only the listed ones
-python3 compile.py --global-templates [ID...]  # equivalent entry point via the installer
-python3 compile.py --list-templates            # see what is there first
+python3 install.py --global-templates [ID...]  # equivalent entry point via the installer
+python3 install.py --list-templates            # see what is there first
 ```
 
 Templates with identical content are skipped (shown as "up to date"), so running it repeatedly is safe. The user-level directory follows `XDG_CONFIG_HOME`, defaulting to `~/.config/woc/templates`.
