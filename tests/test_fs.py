@@ -315,9 +315,9 @@ class EditTest(FsCase):
 
 
 class InstallerNameTest(unittest.TestCase):
-    """`woc-fs` 的名字跟着 woc_prefix 走，不额外占一个 [prefix] 配置键。"""
+    """`woc-fs` 固定叫这个名字：不跟前缀派生，也不占 [prefix] 配置键。"""
 
-    def test_command_names_include_fs(self):
+    def test_fs_name_does_not_follow_prefix(self):
         import importlib.util
 
         spec = importlib.util.spec_from_file_location(
@@ -327,7 +327,7 @@ class InstallerNameTest(unittest.TestCase):
 
         names = {"woc_prefix": "wc", "wocc_prefix": "wcc", "woc_chat_prefix": "wcchat"}
         pairs = module.command_names(names)
-        self.assertEqual(pairs[-1], ("wc-fs", "wocfs.py"))
+        self.assertEqual(pairs[-1], ("woc-fs", "wocfs.py"))
         self.assertEqual(len(pairs), 4)
 
 

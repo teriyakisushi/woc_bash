@@ -1,7 +1,7 @@
 """生成 shell 补全脚本（bash / zsh）。
 
 只补命令名和参数，不涉及执行语义；由用户自己决定是否 source。
-`woc-fs` 不单独占一个配置键，名字从 woc 命令名派生（`<woc_prefix>-fs`）。
+`woc-fs` 固定叫这个名字（不跟前缀派生），也不单独占一个配置键。
 """
 
 
@@ -38,8 +38,8 @@ SHELLS = ("bash", "zsh")
 
 
 def render(shell, names):
-    """names = [woc, wocc, woc_chat]（按配置里的命令名）；woc-fs 由第一个派生。"""
-    all_names = list(names) + [names[0] + "-fs"]
+    """names = [woc, wocc, woc_chat]（按配置里的命令名）；woc-fs 固定不变。"""
+    all_names = list(names) + ["woc-fs"]
     joined = " ".join(all_names)
     usage = f"# usage: source <({names[0]} --completion {shell})"
     if shell == "bash":

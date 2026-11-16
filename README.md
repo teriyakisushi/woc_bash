@@ -48,8 +48,7 @@ python3 install.py --key sk-xxxx
 
 安装器默认把命令放到 `~/bin`，并尝试将该目录加入当前 Shell 的配置文件。
 安装时会询问日志别名和三个命令名（直接回车用默认值，见 [docs/CONFIG.md](docs/CONFIG.md) 的 `[prefix]`）。
-同时会装一个文件读写命令 `<woc 命令名>-fs`（默认 `woc-fs`）：名字从 `woc_prefix`
-派生，不额外占一个配置键。
+同时会装一个文件读写命令 `woc-fs`：名字固定，不跟前缀变，也不额外占一个配置键。
 也可以跳过 API Key 配置，稍后手动设置：
 
 ```bash

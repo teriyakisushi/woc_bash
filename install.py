@@ -36,9 +36,9 @@ ENTRY_SCRIPTS = {
     "wocc_prefix": "wocc.py",
     "woc_chat_prefix": "woc_chat.py",
 }
-# 文件读写命令 woc-fs：名字从 woc_prefix 派生（<woc_prefix>-fs），
-# 不额外占一个 [prefix] 配置键，也就不必改 CONFIG_TEMPLATE 的键集合。
-FS_SUFFIX = "-fs"
+# 文件读写命令固定叫 woc-fs：prompts 与模板里写死了这个名字，跟着前缀变
+# 反而会让模型拿到一个不存在的命令；也就不必占一个 [prefix] 配置键。
+FS_NAME = "woc-fs"
 FS_SCRIPT = "wocfs.py"
 ALL_SCRIPTS = tuple(ENTRY_SCRIPTS.values()) + (FS_SCRIPT,)
 DEFAULT_SRC = "woc.py"
@@ -211,7 +211,7 @@ def _validate_prefix(values: dict, fallback: dict) -> dict:
             continue
         names[key] = value
     commands = [names[key] for key in COMMAND_KEYS]
-    commands.append(names["woc_prefix"] + FS_SUFFIX)  # 派生命名也算在内
+    commands.append(FS_NAME)  # 固定名，不跟前缀变
     if len(set(commands)) != len(commands):
         print("[install] ⚠️  " + "woc / wocc / woc_chat command names must be distinct; all were reset to defaults")
         for key in COMMAND_KEYS:
@@ -367,9 +367,9 @@ def write_prefix_config(names: dict) -> None:
 
 
 def command_names(names: dict) -> list:
-    """[(命令名, 入口脚本), ...]：三条主命令 + 派生的 <woc_prefix>-fs。"""
+    """[(命令名, 入口脚本), ...]：三条主命令 + 固定的 woc-fs。"""
     pairs = [(names[key], ENTRY_SCRIPTS[key]) for key in COMMAND_KEYS]
-    pairs.append((names["woc_prefix"] + FS_SUFFIX, FS_SCRIPT))
+    pairs.append((FS_NAME, FS_SCRIPT))
     return pairs
 
 
@@ -714,14 +714,14 @@ def do_install(args, cfg=None) -> None:
     log("Then try:")
     print(f'    {names["woc_prefix"]}  show the 10 largest files in this directory')
     print(f'    {names["wocc_prefix"]} show me the processes currently running')
-    print(f'    {names["woc_prefix"]}{FS_SUFFIX} read PATH --lines 1:40   view a file slice')
+    print(f'    {FS_NAME} read PATH --lines 1:40   view a file slice')
 
 
 def do_uninstall(args, cfg=None) -> None:
     target_dir = Path(args.prefix).expanduser().resolve()
     names = current_prefix(cfg)
     targets = {names[key] for key in COMMAND_KEYS}
-    targets.add(names["woc_prefix"] + FS_SUFFIX)
+    targets.add(FS_NAME)
     # 旧版本安装的默认命令名
     targets.update({"woc", "wocc", "woc_chat", "woc-fs"})
 

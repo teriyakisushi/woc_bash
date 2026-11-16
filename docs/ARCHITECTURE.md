@@ -206,7 +206,7 @@ fs.py        纯 IO，只被 woc-fs 调用        （独立命令，不参与 lo
 | `tests/test_pipe.py` | 管道模式：`detect_format` 只认 diff/json、prompt 不预设日志、二进制拒绝、头尾截断 |
 | `tests/test_search.py` | 搜索：`query_by_llm` 两种来源、`derive_query` 回退、来源行、字符预算、懒加载 |
 | `tests/test_session.py` | 落盘：脱敏、限长、0600/0700、归档裁剪、恢复 |
-| `tests/test_install.py` | 安装器与配置模板：与 `woc/config.py` 双向比对（少键/多键/值不同都红）；`woc-fs` 的派生命名 |
+| `tests/test_install.py` | 安装器与配置模板：与 `woc/config.py` 双向比对（少键/多键/值不同都红）；`woc-fs` 的固定命名 |
 | `tests/test_fs.py` | `woc-fs`：行窗口、二进制拒绝、截断、原子写与权限位、0 处/多处匹配、CRLF 保留 |
 | `tests/test_help.py` | 三个入口的 `--help`：flag 齐全、`[prefix]` 生效、无 argv 不走管道 |
 | `tests/test_output_text.py` | 终端输出必须是英文：帮助、环境与模板注入、搜索块、会话提示、gate 理由、折叠提示、pipe 默认问题、`woc-fs` 报错，以及真实入口的 `--help` / `--completion` / `--check-templates` / 非终端拒绝 |
@@ -239,7 +239,7 @@ python3 -m unittest discover -s tests
 | 加/改用户可见文案 | 直接写在调用处（整段帮助放 `woc/cli/help.py`） | `tests/test_output_text.py`；终端与 harness 文案一律英文，注释与文档用中文 |
 | 改输出渲染 | `woc/markdown.py`、`woc/colors.py`（**风险最高**） | `tests/test_markdown.py` / `tests/test_chat_stream.py` / `tests/test_colors.py`；别在流式路径上做整段缓冲 |
 | 改安装器 | `install.py` | `tests/test_install.py`；`~/bin/lib/woc` 是拷贝，改完要重跑 `python3 install.py` |
-| 改文件读写命令 | `woc/fs.py`（read / write / edit） | `tests/test_fs.py`；`.woc/templates/file-ops.md` 的用法；`install.py` 的 `FS_SUFFIX` / `FS_SCRIPT` |
+| 改文件读写命令 | `woc/fs.py`（read / write / edit） | `tests/test_fs.py`；`.woc/templates/file-ops.md` 的用法；`install.py` 的 `FS_NAME` / `FS_SCRIPT` |
 
 ---
 

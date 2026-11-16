@@ -42,7 +42,7 @@ Run this in the project root:
 python3 install.py --key sk-xxxx
 ```
 
-The installer puts the commands in `~/bin` by default and tries to add that directory to your current Shell's config file. It asks for the log alias and three command names (press Enter for the defaults, see `[prefix]` in [docs/CONFIG.md](docs/CONFIG.md)). It also installs a file read/write command `<woc command name>-fs` (default `woc-fs`): the name is derived from `woc_prefix` and does not take an extra config key.
+The installer puts the commands in `~/bin` by default and tries to add that directory to your current Shell's config file. It asks for the log alias and three command names (press Enter for the defaults, see `[prefix]` in [docs/CONFIG.md](docs/CONFIG.md)). It also installs a file read/write command `woc-fs`: the name is fixed (it does not follow `woc_prefix`) and does not take an extra config key.
 You can also skip API Key configuration and set it later:
 
 ```bash

@@ -32,10 +32,10 @@ class RenderTest(unittest.TestCase):
         self.assertIn("woc-fs)", script)
         self.assertIn("--lines", script)
 
-    def test_fs_name_derived_from_custom_prefix(self):
+    def test_fs_name_is_fixed_for_custom_prefix(self):
         script = render("bash", ["wc", "wcc", "wcchat"])
-        self.assertIn("complete -F _woc_complete wc wcc wcchat wc-fs", script)
-        self.assertIn("wc-fs)", script)
+        self.assertIn("complete -F _woc_complete wc wcc wcchat woc-fs", script)
+        self.assertIn("woc-fs)", script)
 
     def test_unknown_shell(self):
         with self.assertRaises(ValueError):
