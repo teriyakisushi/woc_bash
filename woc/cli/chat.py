@@ -12,8 +12,8 @@ from ..ui import Spinner
 
 CHAT_SYSTEM_PROMPT = """You are a helpful assistant.
 Answer the user's questions in their language. Use Markdown when it improves
-readability. The current working directory is included as context. Do not
-pretend that you can inspect files unless their contents are provided.
+readability. Do not pretend that you can inspect files unless their
+contents are provided.
 """
 
 # 人工指定搜索内容的会话内命令（例如 `:search DeepSeek V4 发布`）。
@@ -212,18 +212,15 @@ def woc_chat_main(argv=None, name=None, via_woc=False):
         eprint(f"[{alias}] chat mode needs a terminal: standard input is not a terminal. Exiting.", C.RED)
         raise SystemExit(2)
 
-    cwd = os.getcwd()
     system_prompt = CHAT_SYSTEM_PROMPT
     if search_on:
         system_prompt += SEARCH_HINT
     messages = [
         {"role": "system", "content": system_prompt.replace("{name}", alias)},
-        {"role": "system", "content": f"Current working directory: {cwd}"},
     ]
     pending = " ".join(args) if args else None
     colors = C(sys.stdout)
 
-    eprint(f"[{alias}] chat started; current directory: {cwd}", C.GREEN, C.BOLD)
     if search_on:
         eprint(f"[{alias}] web search is used when needed (disable with --no-search; {SEARCH_COMMAND} off also works)", C.GREEN)
     else:
